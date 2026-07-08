@@ -26,8 +26,10 @@ public final class IconCatalog {
         FLAGS("Flags", "🇮🇳"),
         SYMBOLS("Symbols", "★"),
         WORDS("Words", "📝"),
-        // Kept last so the ordinal of every previously persisted category stays stable.
-        BLANK("Blank", "🎨");
+        BLANK("Blank", "🎨"),
+        // New categories are appended so every previously shipped ordinal stays stable.
+        RUBICS("Rubics", "▦"),
+        NUMBERS("Numbers", "123");
 
         private final String displayName;
         private final String sample;
@@ -294,13 +296,18 @@ public final class IconCatalog {
             Category.BLANK,
             Collections.unmodifiableList(new ArrayList<>(Collections.nCopies(MAX_PAIR_COUNT, "")))
         );
+        pools.put(Category.RUBICS, RubicsFaceCatalog.normalPatterns());
+        pools.put(Category.NUMBERS, NumberCatalog.normalNumbers());
 
-        // RANDOM is intentionally emoji-only. WORDS and BLANK are never merged into it.
+        // RANDOM is intentionally emoji-only. Custom-drawn faces, words, and blank cards are
+        // never merged into it.
         Set<String> randomIcons = new LinkedHashSet<>();
         for (Category category : Category.values()) {
             if (category != Category.RANDOM
                 && category != Category.WORDS
-                && category != Category.BLANK) {
+                && category != Category.BLANK
+                && category != Category.RUBICS
+                && category != Category.NUMBERS) {
                 randomIcons.addAll(pools.get(category));
             }
         }
@@ -383,6 +390,8 @@ public final class IconCatalog {
             "PEACE", "PIECE", "WEEK", "WEAK", "SALE", "SAIL", "PLAIN", "PLANE", "HOLE", "WHOLE",
             "BREAK", "BRAKE", "FAIR", "FARE", "CELL", "SELL", "DYE", "DIE", "NEW", "KNEW"
         ));
+        groups.put(Category.RUBICS, RubicsFaceCatalog.trickyGroups());
+        groups.put(Category.NUMBERS, NumberCatalog.trickyGroups());
         return Collections.unmodifiableMap(groups);
     }
 
@@ -398,6 +407,8 @@ public final class IconCatalog {
         triples.put(Category.FLAGS, triple("🇳🇱", "🇱🇺", "🇷🇺"));
         triples.put(Category.SYMBOLS, triple("💓", "💗", "💖"));
         triples.put(Category.WORDS, wordTriple("TO", "TWO", "TOO"));
+        triples.put(Category.RUBICS, RubicsFaceCatalog.trickyTriple());
+        triples.put(Category.NUMBERS, NumberCatalog.trickyTriple());
         return Collections.unmodifiableMap(triples);
     }
 

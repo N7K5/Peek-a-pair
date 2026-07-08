@@ -1,14 +1,19 @@
 package com.example.flipandfind;
 
+import java.math.BigInteger;
+
 /** Pure per-participant statistics for a single game. */
 public final class GameStats {
     public static final int NO_PARTICIPANT = -1;
+    public static final long NO_DECISION_TIME = -1L;
 
     private final int[] attempts;
     private final int[] pairs;
     private final int[] currentStreaks;
     private final int[] longestStreaks;
     private final int[] maxDeficits;
+    private final long[] decisionTimeTotalsMillis;
+    private final int[] timedAttempts;
 
     public GameStats(int participantCount) {
         if (participantCount < 1) {
@@ -19,6 +24,8 @@ public final class GameStats {
         currentStreaks = new int[participantCount];
         longestStreaks = new int[participantCount];
         maxDeficits = new int[participantCount];
+        decisionTimeTotalsMillis = new long[participantCount];
+        timedAttempts = new int[participantCount];
     }
 
     private GameStats(
@@ -26,13 +33,17 @@ public final class GameStats {
         int[] pairs,
         int[] currentStreaks,
         int[] longestStreaks,
-        int[] maxDeficits
+        int[] maxDeficits,
+        long[] decisionTimeTotalsMillis,
+        int[] timedAttempts
     ) {
         this.attempts = attempts.clone();
         this.pairs = pairs.clone();
         this.currentStreaks = currentStreaks.clone();
         this.longestStreaks = longestStreaks.clone();
         this.maxDeficits = maxDeficits.clone();
+        this.decisionTimeTotalsMillis = decisionTimeTotalsMillis.clone();
+        this.timedAttempts = timedAttempts.clone();
     }
 
     /** Records one completed two-card attempt for a player or team participant. */
@@ -61,6 +72,39 @@ public final class GameStats {
         boolean matched,
         int[] participantScores
     ) {
+        validateResolutionScores(participant, matched, participantScores);
+        recordAttempt(participant, matched);
+    }
+
+    /**
+     * Records a resolved attempt together with the active decision time between its first and
+     * second card reveals.
+     */
+    public void recordResolution(
+        int participant,
+        boolean matched,
+        int[] participantScores,
+        long decisionTimeMillis
+    ) {
+        if (decisionTimeMillis < 0L) {
+            throw new IllegalArgumentException("Decision time cannot be negative");
+        }
+        validateResolutionScores(participant, matched, participantScores);
+        long updatedTotal = Math.addExact(
+            decisionTimeTotalsMillis[participant],
+            decisionTimeMillis
+        );
+        int updatedTimedAttempts = Math.incrementExact(timedAttempts[participant]);
+        recordAttempt(participant, matched);
+        decisionTimeTotalsMillis[participant] = updatedTotal;
+        timedAttempts[participant] = updatedTimedAttempts;
+    }
+
+    private void validateResolutionScores(
+        int participant,
+        boolean matched,
+        int[] participantScores
+    ) {
         checkParticipant(participant);
         if (participantScores == null || participantScores.length != pairs.length) {
             throw new IllegalArgumentException("Participant scores have the wrong size");
@@ -71,7 +115,6 @@ public final class GameStats {
                 throw new IllegalArgumentException("Participant scores do not match the resolution");
             }
         }
-        recordAttempt(participant, matched);
     }
 
     public int getParticipantCount() {
@@ -105,6 +148,39 @@ public final class GameStats {
     public int getMaxDeficit(int participant) {
         checkParticipant(participant);
         return maxDeficits[participant];
+    }
+
+    public int getTimedAttempts(int participant) {
+        checkParticipant(participant);
+        return timedAttempts[participant];
+    }
+
+    public long getDecisionTimeTotalMillis(int participant) {
+        checkParticipant(participant);
+        return decisionTimeTotalsMillis[participant];
+    }
+
+    /** Returns the rounded average decision time, or {@link #NO_DECISION_TIME} without data. */
+    public long getAverageDecisionTimeMillis(int participant) {
+        checkParticipant(participant);
+        int count = timedAttempts[participant];
+        if (count == 0) {
+            return NO_DECISION_TIME;
+        }
+        long total = decisionTimeTotalsMillis[participant];
+        long quotient = total / count;
+        long remainder = total % count;
+        return quotient + (remainder >= (count + 1L) / 2L ? 1L : 0L);
+    }
+
+    /** Returns all participants sharing the lowest exact average decision time. */
+    public int[] getQuickestParticipants() {
+        return participantsAtDecisionTimeExtreme(true);
+    }
+
+    /** Returns all participants sharing the highest exact average decision time. */
+    public int[] getSlowestParticipants() {
+        return participantsAtDecisionTimeExtreme(false);
     }
 
     /** Returns match accuracy in the inclusive range 0.0 to 1.0. */
@@ -192,6 +268,14 @@ public final class GameStats {
         return maxDeficits.clone();
     }
 
+    public long[] copyDecisionTimeTotalsMillis() {
+        return decisionTimeTotalsMillis.clone();
+    }
+
+    public int[] copyTimedAttempts() {
+        return timedAttempts.clone();
+    }
+
     /** Restores a defensive, validated stats snapshot. */
     public static GameStats restore(
         int[] attempts,
@@ -201,7 +285,38 @@ public final class GameStats {
         int[] maxDeficits
     ) {
         validateSnapshot(attempts, pairs, currentStreaks, longestStreaks, maxDeficits);
-        return new GameStats(attempts, pairs, currentStreaks, longestStreaks, maxDeficits);
+        return new GameStats(
+            attempts,
+            pairs,
+            currentStreaks,
+            longestStreaks,
+            maxDeficits,
+            new long[attempts.length],
+            new int[attempts.length]
+        );
+    }
+
+    /** Restores a defensive, validated stats snapshot including decision-time data. */
+    public static GameStats restore(
+        int[] attempts,
+        int[] pairs,
+        int[] currentStreaks,
+        int[] longestStreaks,
+        int[] maxDeficits,
+        long[] decisionTimeTotalsMillis,
+        int[] timedAttempts
+    ) {
+        validateSnapshot(attempts, pairs, currentStreaks, longestStreaks, maxDeficits);
+        validateDecisionTimeSnapshot(attempts, decisionTimeTotalsMillis, timedAttempts);
+        return new GameStats(
+            attempts,
+            pairs,
+            currentStreaks,
+            longestStreaks,
+            maxDeficits,
+            decisionTimeTotalsMillis,
+            timedAttempts
+        );
     }
 
     /** Restores a snapshot while also checking the participant count saved by its owner. */
@@ -217,6 +332,65 @@ public final class GameStats {
             throw new IllegalArgumentException("Stats participant count is inconsistent");
         }
         return restore(attempts, pairs, currentStreaks, longestStreaks, maxDeficits);
+    }
+
+    /** Restores all tracked values while checking the participant count saved by its owner. */
+    public static GameStats restore(
+        int participantCount,
+        int[] attempts,
+        int[] pairs,
+        int[] currentStreaks,
+        int[] longestStreaks,
+        int[] maxDeficits,
+        long[] decisionTimeTotalsMillis,
+        int[] timedAttempts
+    ) {
+        if (participantCount < 1 || attempts == null || attempts.length != participantCount) {
+            throw new IllegalArgumentException("Stats participant count is inconsistent");
+        }
+        return restore(
+            attempts,
+            pairs,
+            currentStreaks,
+            longestStreaks,
+            maxDeficits,
+            decisionTimeTotalsMillis,
+            timedAttempts
+        );
+    }
+
+    private int[] participantsAtDecisionTimeExtreme(boolean quickest) {
+        int[] candidates = new int[timedAttempts.length];
+        int candidateCount = 0;
+        int best = NO_PARTICIPANT;
+        for (int participant = 0; participant < timedAttempts.length; participant++) {
+            if (timedAttempts[participant] == 0) {
+                continue;
+            }
+            int comparison = best == NO_PARTICIPANT
+                ? 0
+                : compareDecisionAverages(participant, best);
+            boolean better = best == NO_PARTICIPANT
+                || (quickest ? comparison < 0 : comparison > 0);
+            if (better) {
+                best = participant;
+                candidates[0] = participant;
+                candidateCount = 1;
+            } else if (comparison == 0) {
+                candidates[candidateCount++] = participant;
+            }
+        }
+        int[] result = new int[candidateCount];
+        System.arraycopy(candidates, 0, result, 0, candidateCount);
+        return result;
+    }
+
+    private int compareDecisionAverages(int left, int right) {
+        BigInteger leftScaled = BigInteger.valueOf(decisionTimeTotalsMillis[left])
+            .multiply(BigInteger.valueOf(timedAttempts[right]));
+        BigInteger rightScaled = BigInteger.valueOf(decisionTimeTotalsMillis[right])
+            .multiply(BigInteger.valueOf(timedAttempts[left]));
+        return leftScaled.compareTo(rightScaled);
     }
 
     private void updateMaxDeficits() {
@@ -267,6 +441,29 @@ public final class GameStats {
             }
             if (maxDeficits[participant] < leader - pairs[participant]) {
                 throw new IllegalArgumentException("Saved deficit is inconsistent");
+            }
+        }
+    }
+
+    private static void validateDecisionTimeSnapshot(
+        int[] attempts,
+        long[] decisionTimeTotalsMillis,
+        int[] timedAttempts
+    ) {
+        if (decisionTimeTotalsMillis == null || timedAttempts == null
+            || decisionTimeTotalsMillis.length != attempts.length
+            || timedAttempts.length != attempts.length) {
+            throw new IllegalArgumentException("Decision-time arrays have the wrong size");
+        }
+        for (int participant = 0; participant < attempts.length; participant++) {
+            if (decisionTimeTotalsMillis[participant] < 0L
+                || timedAttempts[participant] < 0
+                || timedAttempts[participant] > attempts[participant]) {
+                throw new IllegalArgumentException("Saved decision-time values are inconsistent");
+            }
+            if (timedAttempts[participant] == 0
+                && decisionTimeTotalsMillis[participant] != 0L) {
+                throw new IllegalArgumentException("Decision time requires a timed attempt");
             }
         }
     }

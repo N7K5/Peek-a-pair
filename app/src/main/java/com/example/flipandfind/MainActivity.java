@@ -48,6 +48,7 @@ import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -69,6 +70,7 @@ public final class MainActivity extends Activity {
     private static final String DARK_THEME = "dark_theme";
     private static final String THEME_PRESET = "theme_preset";
     private static final String SWAP_AFTER_MISS = "swap_after_miss";
+    private static final String MISS_REVEAL_TENTHS = "miss_reveal_tenths";
     private static final String USE_CARD_COLORS = "use_card_colors";
     private static final String TABLETOP_MODE = "tabletop_mode";
     private static final String CARD_BACK_STYLE = "card_back_style";
@@ -121,6 +123,8 @@ public final class MainActivity extends Activity {
         IconCatalog.Category.TRAVEL,
         IconCatalog.Category.OBJECTS,
         IconCatalog.Category.SYMBOLS,
+        IconCatalog.Category.RUBICS,
+        IconCatalog.Category.NUMBERS,
         IconCatalog.Category.WORDS,
         IconCatalog.Category.BLANK
     };
@@ -260,6 +264,7 @@ public final class MainActivity extends Activity {
     private ComputerDifficulty selectedDifficulty = ComputerDifficulty.EASY;
     private boolean trickyMode;
     private boolean swapAfterMiss;
+    private int missRevealTenths = MissRevealDuration.DEFAULT_TENTHS;
     private boolean useCardColors;
     private TabletopMode tabletopMode = TabletopMode.STATIC_THEME;
     private CardBackStyle cardBackStyle = CardBackStyle.CLASSIC;
@@ -290,6 +295,9 @@ public final class MainActivity extends Activity {
     private GameTimer gameTimer;
     private long lastGameDurationMillis;
     private boolean completedGameRecorded;
+    private long pairDecisionElapsedMillis;
+    private long pairDecisionSegmentStartedAtElapsed = -1L;
+    private long pendingPairDecisionDurationMillis = GameStats.NO_DECISION_TIME;
     private CardTileView[] cardViews;
     private BoardLayout boardLayout;
     private int[] restoredBoardSlots;
@@ -363,6 +371,9 @@ public final class MainActivity extends Activity {
         themePreset = ThemePreset.load(settings);
         darkTheme = resolveDarkTheme(themePreset);
         swapAfterMiss = settings.getBoolean(SWAP_AFTER_MISS, false);
+        missRevealTenths = MissRevealDuration.clampTenths(
+            settings.getInt(MISS_REVEAL_TENTHS, MissRevealDuration.DEFAULT_TENTHS)
+        );
         useCardColors = settings.getBoolean(USE_CARD_COLORS, false);
         tabletopMode = TabletopMode.fromPreference(settings.getString(TABLETOP_MODE, null));
         cardBackStyle = CardBackStyle.fromPreference(
@@ -510,7 +521,20 @@ public final class MainActivity extends Activity {
                 outState.putIntArray("statsCurrentStreaks", gameStats.copyCurrentStreaks());
                 outState.putIntArray("statsLongestStreaks", gameStats.copyLongestStreaks());
                 outState.putIntArray("statsMaxDeficits", gameStats.copyMaxDeficits());
+                outState.putLongArray(
+                    "statsDecisionTimeTotals",
+                    gameStats.copyDecisionTimeTotalsMillis()
+                );
+                outState.putIntArray("statsTimedAttempts", gameStats.copyTimedAttempts());
             }
+            outState.putLong(
+                "pairDecisionElapsed",
+                currentPairDecisionElapsedMillis(SystemClock.elapsedRealtime())
+            );
+            outState.putLong(
+                "pendingPairDecisionDuration",
+                pendingPairDecisionDurationMillis
+            );
             if (gameTimer != null) {
                 outState.putLong(
                     "gameActiveDuration",
@@ -562,14 +586,27 @@ public final class MainActivity extends Activity {
                 state.getIntArray("memoryIndices"),
                 state.getIntArray("memoryPairIds")
             );
-            gameStats = GameStats.restore(
-                game.getTotalPlayerCount(),
-                state.getIntArray("statsAttempts"),
-                state.getIntArray("statsMatches"),
-                state.getIntArray("statsCurrentStreaks"),
-                state.getIntArray("statsLongestStreaks"),
-                state.getIntArray("statsMaxDeficits")
-            );
+            long[] decisionTimeTotals = state.getLongArray("statsDecisionTimeTotals");
+            int[] timedAttempts = state.getIntArray("statsTimedAttempts");
+            gameStats = decisionTimeTotals == null || timedAttempts == null
+                ? GameStats.restore(
+                    game.getTotalPlayerCount(),
+                    state.getIntArray("statsAttempts"),
+                    state.getIntArray("statsMatches"),
+                    state.getIntArray("statsCurrentStreaks"),
+                    state.getIntArray("statsLongestStreaks"),
+                    state.getIntArray("statsMaxDeficits")
+                )
+                : GameStats.restore(
+                    game.getTotalPlayerCount(),
+                    state.getIntArray("statsAttempts"),
+                    state.getIntArray("statsMatches"),
+                    state.getIntArray("statsCurrentStreaks"),
+                    state.getIntArray("statsLongestStreaks"),
+                    state.getIntArray("statsMaxDeficits"),
+                    decisionTimeTotals,
+                    timedAttempts
+                );
             if (!java.util.Arrays.equals(
                 gameStats.copyMatches(),
                 game.copyScores()
@@ -588,6 +625,19 @@ public final class MainActivity extends Activity {
             );
             lastGameDurationMillis = state.getLong("lastGameDuration", 0L);
             completedGameRecorded = state.getBoolean("completedGameRecorded", false);
+            pairDecisionElapsedMillis = game.getPhase() == GameState.Phase.WAITING_SECOND
+                ? Math.max(0L, state.getLong("pairDecisionElapsed", 0L))
+                : 0L;
+            pairDecisionSegmentStartedAtElapsed = -1L;
+            pendingPairDecisionDurationMillis = game.getPhase() == GameState.Phase.RESOLVING
+                ? Math.max(
+                    GameStats.NO_DECISION_TIME,
+                    state.getLong(
+                        "pendingPairDecisionDuration",
+                        GameStats.NO_DECISION_TIME
+                    )
+                )
+                : GameStats.NO_DECISION_TIME;
             String[] seriesNames = state.getStringArray("seriesNames");
             if (seriesNames == null) {
                 gameSeries = new GameSeries(currentParticipantNames());
@@ -607,6 +657,7 @@ public final class MainActivity extends Activity {
             computerMemory = null;
             gameSeries = null;
             gameTimer = null;
+            resetPairDecisionClock();
             screen = Screen.SETUP;
         }
     }
@@ -622,6 +673,7 @@ public final class MainActivity extends Activity {
         gameTimer = null;
         lastGameDurationMillis = 0L;
         completedGameRecorded = false;
+        resetPairDecisionClock();
         cardViews = null;
         boardLayout = null;
         restoredBoardSlots = null;
@@ -662,6 +714,17 @@ public final class MainActivity extends Activity {
         brandRow.addView(titleBlock, margins(weighted(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f), 16, 0, 0, 0));
         titleBlock.addView(label("Peek-a-Pair", 32, INK, true), matchWrap());
         titleBlock.addView(label("Remember. Match. Win together.", 15, MUTED, false), margins(matchWrap(), 0, 3, 0, 0));
+
+        TextView exitApp = label("×", 27, INK, false);
+        exitApp.setGravity(Gravity.CENTER);
+        exitApp.setFocusable(true);
+        exitApp.setContentDescription("Exit Peek-a-Pair");
+        exitApp.setBackground(ripple(SURFACE_TINT, 14));
+        exitApp.setOnClickListener(view -> {
+            cancelPendingActions();
+            finishAndRemoveTask();
+        });
+        brandRow.addView(exitApp, fixed(dp(48), dp(48)));
 
         TextView intro = label(
             "A quick pass-and-play challenge for friends and family.",
@@ -1059,6 +1122,100 @@ public final class MainActivity extends Activity {
             ),
             margins(matchWrap(), 0, 8, 0, 0)
         );
+
+        LinearLayout missRevealControl = verticalLayout();
+        missRevealControl.setPadding(dp(15), dp(13), dp(15), dp(10));
+        missRevealControl.setBackground(outlined(SURFACE_TINT, DIVIDER, 1, 15));
+        LinearLayout missRevealHeading = horizontalLayout();
+        missRevealHeading.setGravity(Gravity.CENTER_VERTICAL);
+        missRevealControl.addView(missRevealHeading, matchWrap());
+        TextView missRevealTitle = label("Wrong-pair reveal time", 16, INK, true);
+        missRevealHeading.addView(
+            missRevealTitle,
+            weighted(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        );
+        TextView missRevealValue = label(
+            MissRevealDuration.displayText(missRevealTenths),
+            14,
+            PRIMARY,
+            true
+        );
+        missRevealValue.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        missRevealValue.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        missRevealHeading.addView(
+            missRevealValue,
+            margins(wrapWrap(), 10, 0, 0, 0)
+        );
+        missRevealControl.addView(
+            label(
+                "How long an incorrect pair stays face up before the next turn.",
+                13,
+                MUTED,
+                false
+            ),
+            margins(matchWrap(), 0, 4, 0, 0)
+        );
+
+        SeekBar missRevealSlider = new SeekBar(this);
+        missRevealSlider.setMax(MissRevealDuration.maxProgress());
+        missRevealSlider.setProgress(
+            MissRevealDuration.progressForTenths(missRevealTenths)
+        );
+        missRevealSlider.setKeyProgressIncrement(1);
+        missRevealSlider.setProgressTintList(ColorStateList.valueOf(PRIMARY));
+        missRevealSlider.setProgressBackgroundTintList(ColorStateList.valueOf(DIVIDER));
+        missRevealSlider.setThumbTintList(ColorStateList.valueOf(PRIMARY));
+        missRevealSlider.setContentDescription(
+            "Wrong-pair reveal time, "
+                + MissRevealDuration.displayText(missRevealTenths)
+        );
+        missRevealSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                missRevealTenths = MissRevealDuration.tenthsForProgress(progress);
+                String duration = MissRevealDuration.displayText(missRevealTenths);
+                missRevealValue.setText(duration);
+                seekBar.setContentDescription("Wrong-pair reveal time, " + duration);
+                if (fromUser) {
+                    getSharedPreferences(SETTINGS, MODE_PRIVATE)
+                        .edit()
+                        .putInt(MISS_REVEAL_TENTHS, missRevealTenths)
+                        .apply();
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+                // No-op.
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                // The live value label announces the final selection.
+            }
+        });
+        missRevealControl.addView(
+            missRevealSlider,
+            margins(fixed(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)), 0, 4, 0, 0)
+        );
+        LinearLayout missRevealRange = horizontalLayout();
+        TextView shortestReveal = label("0.5s", 12, MUTED, false);
+        TextView longestReveal = label("3.0s", 12, MUTED, false);
+        longestReveal.setGravity(Gravity.END);
+        missRevealRange.addView(
+            shortestReveal,
+            weighted(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        );
+        missRevealRange.addView(
+            longestReveal,
+            weighted(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        );
+        missRevealControl.addView(missRevealRange, matchWrap());
+        gameplayCard.addView(
+            missRevealControl,
+            margins(matchWrap(), 0, 8, 0, 0)
+        );
+
         gameplayCard.addView(
             advancedToggle(
                 "Match sound",
@@ -2393,11 +2550,21 @@ public final class MainActivity extends Activity {
             iconCategoryFlow.addView(chip);
         }
         if (selectedIconCategory == IconCatalog.Category.RANDOM) {
-            iconCategoryHint.setText("A fresh mix from all emoji collections — words excluded");
+            iconCategoryHint.setText(
+                "A fresh mix from emoji collections — custom modes excluded"
+            );
         } else if (selectedIconCategory == IconCatalog.Category.BLANK) {
-            iconCategoryHint.setText("Color-only cards — turning Pair colors off returns to Random");
+            iconCategoryHint.setText(
+                "Hard: match by color alone — turning Pair colors off returns to Random"
+            );
         } else if (selectedIconCategory == IconCatalog.Category.WORDS) {
             iconCategoryHint.setText("Short words with no more than 5 letters");
+        } else if (selectedIconCategory == IconCatalog.Category.RUBICS) {
+            iconCategoryHint.setText(
+                "Hard: match distinct 3 × 3 scrambled cube faces"
+            );
+        } else if (selectedIconCategory == IconCatalog.Category.NUMBERS) {
+            iconCategoryHint.setText("Numbers with no more than 3 digits");
         } else {
             boolean sampleSupported = CardTileView.allGlyphsSupported(
                 new String[] {selectedIconCategory.getSample()}
@@ -2420,15 +2587,31 @@ public final class MainActivity extends Activity {
         trickyToggle.setContentDescription(
             "Tricky mode " + (trickyMode ? "on" : "off")
         );
-        trickyHint.setText(
-            selectedIconCategory == IconCatalog.Category.BLANK
-                ? (trickyMode
+        if (selectedIconCategory == IconCatalog.Category.BLANK) {
+            trickyHint.setText(
+                trickyMode
                     ? "Uses deliberately similar—but still different—pair colors"
-                    : "Turn on for closer, more confusing pair colors")
-                : trickyMode
-                ? "Uses deliberately similar symbols or easily confused words"
-                : "Turn on for near-lookalike cards"
-        );
+                    : "Turn on for closer, more confusing pair colors"
+            );
+        } else if (selectedIconCategory == IconCatalog.Category.RUBICS) {
+            trickyHint.setText(
+                trickyMode
+                    ? "Extra hard: cube faces differ by only one sticker"
+                    : "Turn on for near-identical cube-face scrambles"
+            );
+        } else if (selectedIconCategory == IconCatalog.Category.NUMBERS) {
+            trickyHint.setText(
+                trickyMode
+                    ? "Uses easily confused numbers such as 487 and 478"
+                    : "Turn on for numbers with nearly identical digits"
+            );
+        } else {
+            trickyHint.setText(
+                trickyMode
+                    ? "Uses deliberately similar symbols or easily confused words"
+                    : "Turn on for near-lookalike cards"
+            );
+        }
     }
 
     private void renderMovementControl() {
@@ -2457,7 +2640,7 @@ public final class MainActivity extends Activity {
                 ? (trickyMode
                     ? "Similar—but still different—colors are used for tricky pairs"
                     : "Each pair uses a strongly distinct color")
-                : "Cards use symbols or words without a pair-color hint"
+                : "Cards use symbols, numbers, cube faces, or words without a pair-color hint"
         );
     }
 
@@ -2518,6 +2701,7 @@ public final class MainActivity extends Activity {
         gameTimer = new GameTimer(SystemClock.elapsedRealtime());
         lastGameDurationMillis = 0L;
         completedGameRecorded = false;
+        resetPairDecisionClock();
         restoredBoardSlots = null;
         animateBoardEntrance = true;
         turnHandoffRequired = turnHandoffEnabled && !game.isComputerTurn();
@@ -2612,8 +2796,12 @@ public final class MainActivity extends Activity {
         );
         boolean wordMode = selectedIconCategory == IconCatalog.Category.WORDS;
         boolean blankMode = selectedIconCategory == IconCatalog.Category.BLANK;
+        boolean rubicsMode = selectedIconCategory == IconCatalog.Category.RUBICS;
+        boolean numberMode = selectedIconCategory == IconCatalog.Category.NUMBERS;
         boolean useShapeFallback = !blankMode
             && !wordMode
+            && !rubicsMode
+            && !numberMode
             && !CardTileView.allGlyphsSupported(icons);
         boolean colorsEnabled = useCardColors || blankMode;
 
@@ -2708,13 +2896,39 @@ public final class MainActivity extends Activity {
         if (flipAndShowCard(cardIndex) && game.getPhase() == GameState.Phase.RESOLVING) {
             setInputLocked(true);
             updateGameHeader("Checking the pair…");
-            postGameAction(REVEAL_DELAY_MS, this::resolveCurrentTurn);
+            postGameAction(
+                currentPairRevealDelayMillis(REVEAL_DELAY_MS),
+                this::resolveCurrentTurn
+            );
         }
     }
 
+    private long currentPairRevealDelayMillis(long matchingPairDelayMillis) {
+        if (game == null || game.getPhase() != GameState.Phase.RESOLVING) {
+            return matchingPairDelayMillis;
+        }
+        int first = game.getFirstCard();
+        int second = game.getSecondCard();
+        if (first < 0
+            || second < 0
+            || first >= game.getCardCount()
+            || second >= game.getCardCount()
+            || game.getPairId(first) == game.getPairId(second)) {
+            return matchingPairDelayMillis;
+        }
+        return MissRevealDuration.millisForTenths(missRevealTenths);
+    }
+
     private boolean flipAndShowCard(int cardIndex) {
+        GameState.Phase phaseBeforeReveal = game.getPhase();
+        long revealTime = SystemClock.elapsedRealtime();
         if (!game.flipCard(cardIndex)) {
             return false;
+        }
+        if (phaseBeforeReveal == GameState.Phase.WAITING_FIRST) {
+            startPairDecisionClock(revealTime);
+        } else if (phaseBeforeReveal == GameState.Phase.WAITING_SECOND) {
+            completePairDecisionClock(revealTime);
         }
         int pairId = game.getPairId(cardIndex);
         computerMemory.remember(cardIndex, pairId);
@@ -2736,12 +2950,22 @@ public final class MainActivity extends Activity {
         GameState.Resolution resolution = game.resolveTurn();
         computerMemory.forgetMatchedCards(game);
         if (gameStats != null) {
-            gameStats.recordResolution(
-                resolution.getScoringPlayer(),
-                resolution.isMatch(),
-                game.copyScores()
-            );
+            if (pendingPairDecisionDurationMillis == GameStats.NO_DECISION_TIME) {
+                gameStats.recordResolution(
+                    resolution.getScoringPlayer(),
+                    resolution.isMatch(),
+                    game.copyScores()
+                );
+            } else {
+                gameStats.recordResolution(
+                    resolution.getScoringPlayer(),
+                    resolution.isMatch(),
+                    game.copyScores(),
+                    pendingPairDecisionDurationMillis
+                );
+            }
         }
+        pendingPairDecisionDurationMillis = GameStats.NO_DECISION_TIME;
         int first = resolution.getFirstCard();
         int second = resolution.getSecondCard();
 
@@ -3032,20 +3256,27 @@ public final class MainActivity extends Activity {
             return;
         }
         updateGameHeader("Bot is checking the pair…");
-        postGameAction(REVEAL_DELAY_MS, this::resolveCurrentTurn);
+        postGameAction(
+            currentPairRevealDelayMillis(REVEAL_DELAY_MS),
+            this::resolveCurrentTurn
+        );
     }
 
     private void resumePendingGameAction() {
         if (screen != Screen.GAME || game == null || paused || leaveDialogVisible) {
             return;
         }
+        resumePairDecisionClock(SystemClock.elapsedRealtime());
         if (game.getPhase() == GameState.Phase.FINISHED) {
             setInputLocked(true);
             showResultsScreen();
         } else if (game.getPhase() == GameState.Phase.RESOLVING) {
             setInputLocked(true);
             updateGameHeader("Checking the pair…");
-            postGameAction(500L, this::resolveCurrentTurn);
+            postGameAction(
+                currentPairRevealDelayMillis(500L),
+                this::resolveCurrentTurn
+            );
         } else if (game.isComputerTurn()) {
             setInputLocked(true);
             if (game.getPhase() == GameState.Phase.WAITING_SECOND) {
@@ -3643,7 +3874,13 @@ public final class MainActivity extends Activity {
                     ? "— accuracy"
                     : gameStats.getAccuracyPercent(participant) + "% accuracy") + "  •  "
                     + "best streak " + gameStats.getLongestStreak(participant) + "  •  "
-                    + gameStats.getPairs(participant) + " pairs captured",
+                    + gameStats.getPairs(participant) + " pairs captured  •  "
+                    + (gameStats.getAverageDecisionTimeMillis(participant)
+                        == GameStats.NO_DECISION_TIME
+                        ? "— average decision"
+                        : formatDecisionDuration(
+                            gameStats.getAverageDecisionTimeMillis(participant)
+                        ) + " average decision"),
                 12,
                 MUTED,
                 false
@@ -3666,6 +3903,68 @@ public final class MainActivity extends Activity {
         );
         comebackText.setPadding(0, dp(12), 0, 0);
         card.addView(comebackText, matchWrap());
+
+        int[] quickest = gameStats.getQuickestParticipants();
+        int[] slowest = gameStats.getSlowestParticipants();
+        if (quickest.length == 0) {
+            TextView noPace = label(
+                "Decision pace: no completed timing data",
+                13,
+                MUTED,
+                true
+            );
+            noPace.setPadding(0, dp(8), 0, 0);
+            card.addView(noPace, matchWrap());
+        } else {
+            TextView quickestText = label(
+                decisionPaceSummary("Quickest", quickest),
+                13,
+                SUCCESS,
+                true
+            );
+            quickestText.setPadding(0, dp(8), 0, 0);
+            card.addView(quickestText, matchWrap());
+
+            TextView slowestText = label(
+                decisionPaceSummary("Slowest", slowest),
+                13,
+                MUTED,
+                true
+            );
+            slowestText.setPadding(0, dp(5), 0, 0);
+            card.addView(slowestText, matchWrap());
+        }
+    }
+
+    private String decisionPaceSummary(String role, int[] participants) {
+        return role + (participants.length == 1 ? " player: " : " players: ")
+            + resultParticipantNames(participants) + " — "
+            + formatDecisionDuration(
+                gameStats.getAverageDecisionTimeMillis(participants[0])
+            ) + " average";
+    }
+
+    private String resultParticipantNames(int[] participants) {
+        StringBuilder builder = new StringBuilder();
+        for (int index = 0; index < participants.length; index++) {
+            if (index > 0) {
+                builder.append(index == participants.length - 1 ? " & " : ", ");
+            }
+            builder.append(resultParticipantName(participants[index]));
+        }
+        return builder.toString();
+    }
+
+    private String formatDecisionDuration(long durationMillis) {
+        long safeMillis = Math.max(0L, durationMillis);
+        if (safeMillis < 1_000L) {
+            return safeMillis + "ms";
+        }
+        if (safeMillis < 60_000L) {
+            long tenths = Math.round(safeMillis / 100.0);
+            return (tenths / 10L) + "." + (tenths % 10L) + "s";
+        }
+        return formatDuration(safeMillis);
     }
 
     private String resultParticipantName(int participant) {
@@ -3845,6 +4144,7 @@ public final class MainActivity extends Activity {
         if (screen != Screen.GAME || leaveDialogVisible) {
             return;
         }
+        pausePairDecisionClock(SystemClock.elapsedRealtime());
         suspendGameActions();
         leaveDialogVisible = true;
         setInputLocked(true);
@@ -3899,6 +4199,7 @@ public final class MainActivity extends Activity {
         super.onPause();
         stopPairRepeat();
         if (screen == Screen.GAME) {
+            pausePairDecisionClock(SystemClock.elapsedRealtime());
             if (gameTimer != null) {
                 gameTimer.pause(SystemClock.elapsedRealtime());
             }
@@ -3930,7 +4231,9 @@ public final class MainActivity extends Activity {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
             enterImmersiveMode();
+            resumePairDecisionClock(SystemClock.elapsedRealtime());
         } else {
+            pausePairDecisionClock(SystemClock.elapsedRealtime());
             stopPairRepeat();
         }
     }
@@ -3942,6 +4245,56 @@ public final class MainActivity extends Activity {
             gameFeedback.release();
         }
         super.onDestroy();
+    }
+
+    private void startPairDecisionClock(long nowElapsed) {
+        pairDecisionElapsedMillis = 0L;
+        pairDecisionSegmentStartedAtElapsed = -1L;
+        pendingPairDecisionDurationMillis = GameStats.NO_DECISION_TIME;
+        resumePairDecisionClock(nowElapsed);
+    }
+
+    private void completePairDecisionClock(long nowElapsed) {
+        pausePairDecisionClock(nowElapsed);
+        pendingPairDecisionDurationMillis = pairDecisionElapsedMillis;
+        pairDecisionElapsedMillis = 0L;
+    }
+
+    private void pausePairDecisionClock(long nowElapsed) {
+        if (pairDecisionSegmentStartedAtElapsed < 0L) {
+            return;
+        }
+        pairDecisionElapsedMillis = Math.addExact(
+            pairDecisionElapsedMillis,
+            Math.max(0L, nowElapsed - pairDecisionSegmentStartedAtElapsed)
+        );
+        pairDecisionSegmentStartedAtElapsed = -1L;
+    }
+
+    private void resumePairDecisionClock(long nowElapsed) {
+        if (game != null
+            && game.getPhase() == GameState.Phase.WAITING_SECOND
+            && pairDecisionSegmentStartedAtElapsed < 0L
+            && !paused
+            && !leaveDialogVisible
+            && hasWindowFocus()) {
+            pairDecisionSegmentStartedAtElapsed = nowElapsed;
+        }
+    }
+
+    private long currentPairDecisionElapsedMillis(long nowElapsed) {
+        return pairDecisionSegmentStartedAtElapsed < 0L
+            ? pairDecisionElapsedMillis
+            : Math.addExact(
+                pairDecisionElapsedMillis,
+                Math.max(0L, nowElapsed - pairDecisionSegmentStartedAtElapsed)
+            );
+    }
+
+    private void resetPairDecisionClock() {
+        pairDecisionElapsedMillis = 0L;
+        pairDecisionSegmentStartedAtElapsed = -1L;
+        pendingPairDecisionDurationMillis = GameStats.NO_DECISION_TIME;
     }
 
     private void suspendGameActions() {

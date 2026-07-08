@@ -21,7 +21,7 @@ import android.provider.Settings;
 import android.view.View;
 import android.view.animation.DecelerateInterpolator;
 
-/** Draws card faces, including system emoji selected for the current game. */
+/** Draws card faces, including system emoji, words, numbers, and Rubics patterns. */
 public final class CardTileView extends View {
     private static final int FACE = Color.WHITE;
     private static final int MATCHED_FACE = Color.rgb(232, 248, 239);
@@ -38,6 +38,14 @@ public final class CardTileView extends View {
         Color.rgb(15, 118, 110),
         Color.rgb(190, 24, 93),
         Color.rgb(71, 85, 105)
+    };
+    private static final int[] RUBICS_STICKER_COLORS = {
+        Color.rgb(246, 247, 249), // White
+        Color.rgb(255, 213, 0),   // Yellow
+        Color.rgb(210, 38, 48),   // Red
+        Color.rgb(255, 122, 0),   // Orange
+        Color.rgb(0, 91, 187),    // Blue
+        Color.rgb(0, 155, 72)     // Green
     };
 
     private static final String[] SHAPE_NAMES = {
@@ -62,6 +70,7 @@ public final class CardTileView extends View {
     private final DecelerateInterpolator flipInterpolator = new DecelerateInterpolator();
     private final float[] constellationX = new float[ConstellationPattern.POINT_COUNT];
     private final float[] constellationY = new float[ConstellationPattern.POINT_COUNT];
+    private final int[] rubicsStickerIds = new int[9];
 
     private AnimatorSet activeStateAnimator;
     private Animator activeMidpointAnimator;
@@ -75,9 +84,12 @@ public final class CardTileView extends View {
     private CardBackGeometry cardBackGeometry = CardBackGeometry.forCard(0);
     private int pairId;
     private String iconText = "";
+    private String rubicsSpokenDescription = "";
     private boolean wordMode;
     private boolean fallbackToShape;
     private boolean trickyFallback;
+    private boolean rubicsMode;
+    private boolean numberMode;
     private int pairCount;
     private boolean usePairColor;
     private boolean reducedMotion;
@@ -230,6 +242,14 @@ public final class CardTileView extends View {
         this.fallbackToShape = fallbackToShape;
         this.trickyFallback = fallbackToShape && trickyFallback;
         this.pairCount = Math.max(0, pairCount);
+        rubicsMode = RubicsFaceCatalog.isToken(this.iconText);
+        numberMode = NumberCatalog.isNumber(this.iconText);
+        rubicsSpokenDescription = "";
+        if (rubicsMode) {
+            int[] decodedColors = RubicsFaceCatalog.decodeColors(this.iconText);
+            System.arraycopy(decodedColors, 0, rubicsStickerIds, 0, rubicsStickerIds.length);
+            rubicsSpokenDescription = RubicsFaceCatalog.spokenDescription(this.iconText);
+        }
         invalidate();
         updateContentDescription();
     }
@@ -245,8 +265,11 @@ public final class CardTileView extends View {
             if (label == null) {
                 return false;
             }
-            // An empty label is intentional for the BLANK category and needs no glyph.
-            if (!label.isEmpty() && !glyphPaint.hasGlyph(label)) {
+            // Empty labels and custom-drawn Rubics faces do not depend on a font glyph.
+            if (!label.isEmpty()
+                && !RubicsFaceCatalog.isToken(label)
+                && !NumberCatalog.isNumber(label)
+                && !glyphPaint.hasGlyph(label)) {
                 return false;
             }
         }
@@ -1454,6 +1477,14 @@ public final class CardTileView extends View {
     }
 
     private void drawSymbol(Canvas canvas, int faceColor) {
+        if (rubicsMode) {
+            drawRubicsFace(canvas);
+            return;
+        }
+        if (numberMode) {
+            drawNumber(canvas, faceColor);
+            return;
+        }
         if (!fallbackToShape) {
             if (iconText.isEmpty()) {
                 return;
@@ -1521,6 +1552,155 @@ public final class CardTileView extends View {
         }
     }
 
+    /** Draws one cube face without relying on fonts or emoji support. */
+    private void drawRubicsFace(Canvas canvas) {
+        float minimum = Math.min(getWidth(), getHeight());
+        if (minimum <= 0f) {
+            return;
+        }
+        float side = minimum * (highContrast ? 0.72f : 0.68f);
+        float left = (getWidth() - side) / 2f;
+        float top = (getHeight() - side) / 2f;
+        float outerRadius = Math.min(side * 0.16f, Math.max(dp(2f), side * 0.075f));
+        float edge = Math.min(
+            side * 0.09f,
+            Math.max(dp(highContrast ? 1.5f : 1f), side * 0.035f)
+        );
+        float gap = Math.min(
+            side * 0.08f,
+            Math.max(dp(highContrast ? 1.15f : 0.8f), side * 0.027f)
+        );
+        float cell = (side - edge * 2f - gap * 2f) / 3f;
+        int frameColor = highContrast ? Color.BLACK : Color.rgb(25, 29, 38);
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(frameColor);
+        canvas.drawRoundRect(
+            left,
+            top,
+            left + side,
+            top + side,
+            outerRadius,
+            outerRadius,
+            paint
+        );
+
+        float stickerRadius = Math.max(dp(0.6f), cell * 0.09f);
+        for (int row = 0; row < 3; row++) {
+            for (int column = 0; column < 3; column++) {
+                int stickerIndex = row * 3 + column;
+                int colorId = rubicsStickerIds[stickerIndex];
+                float stickerLeft = left + edge + column * (cell + gap);
+                float stickerTop = top + edge + row * (cell + gap);
+                float stickerRight = stickerLeft + cell;
+                float stickerBottom = stickerTop + cell;
+
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(rubicsStickerColor(colorId));
+                canvas.drawRoundRect(
+                    stickerLeft,
+                    stickerTop,
+                    stickerRight,
+                    stickerBottom,
+                    stickerRadius,
+                    stickerRadius,
+                    paint
+                );
+
+                if (colorBlindPatterns) {
+                    drawRubicsStickerCue(
+                        canvas,
+                        colorId,
+                        stickerLeft,
+                        stickerTop,
+                        stickerRight,
+                        stickerBottom
+                    );
+                }
+
+                if (highContrast) {
+                    paint.setStyle(Paint.Style.STROKE);
+                    paint.setStrokeWidth(Math.max(dp(0.65f), cell * 0.055f));
+                    paint.setColor(frameColor);
+                    canvas.drawRoundRect(
+                        stickerLeft,
+                        stickerTop,
+                        stickerRight,
+                        stickerBottom,
+                        stickerRadius,
+                        stickerRadius,
+                        paint
+                    );
+                }
+            }
+        }
+    }
+
+    /** Adds one compact, repeatable non-color mark for each sticker color. */
+    private void drawRubicsStickerCue(
+        Canvas canvas,
+        int colorId,
+        float left,
+        float top,
+        float right,
+        float bottom
+    ) {
+        float centerX = (left + right) / 2f;
+        float centerY = (top + bottom) / 2f;
+        float halfSpan = Math.min(right - left, bottom - top) * 0.23f;
+        int stickerColor = rubicsStickerColor(colorId);
+        paint.setColor(colorWithAlpha(contrastTextColor(stickerColor), 190));
+        paint.setStrokeWidth(Math.max(dp(0.55f), halfSpan * 0.22f));
+        paint.setStrokeCap(Paint.Cap.ROUND);
+
+        switch (colorId) {
+            case 0:
+                paint.setStyle(Paint.Style.FILL);
+                canvas.drawCircle(centerX, centerY, Math.max(dp(0.55f), halfSpan * 0.35f), paint);
+                break;
+            case 1:
+                paint.setStyle(Paint.Style.STROKE);
+                canvas.drawCircle(centerX, centerY, Math.max(dp(0.75f), halfSpan * 0.65f), paint);
+                break;
+            case 2:
+                paint.setStyle(Paint.Style.STROKE);
+                canvas.drawLine(centerX - halfSpan, centerY, centerX + halfSpan, centerY, paint);
+                break;
+            case 3:
+                paint.setStyle(Paint.Style.STROKE);
+                canvas.drawLine(centerX, centerY - halfSpan, centerX, centerY + halfSpan, paint);
+                break;
+            case 4:
+                paint.setStyle(Paint.Style.STROKE);
+                canvas.drawLine(
+                    centerX - halfSpan,
+                    centerY + halfSpan,
+                    centerX + halfSpan,
+                    centerY - halfSpan,
+                    paint
+                );
+                break;
+            case 5:
+            default:
+                paint.setStyle(Paint.Style.STROKE);
+                canvas.drawLine(
+                    centerX - halfSpan,
+                    centerY - halfSpan,
+                    centerX + halfSpan,
+                    centerY + halfSpan,
+                    paint
+                );
+                break;
+        }
+    }
+
+    private static int rubicsStickerColor(int colorId) {
+        if (colorId < 0 || colorId >= RUBICS_STICKER_COLORS.length) {
+            return RUBICS_STICKER_COLORS[0];
+        }
+        return RUBICS_STICKER_COLORS[colorId];
+    }
+
     private void drawEmoji(Canvas canvas) {
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(Color.rgb(36, 39, 55));
@@ -1542,6 +1722,24 @@ public final class CardTileView extends View {
             ? Math.min(getHeight() * 0.32f, getWidth() * 0.27f)
             : Math.min(getHeight() * 0.29f, getWidth() * 0.24f);
         paint.setTextSize(Math.max(dp(highContrast ? 8f : 7f), textSize));
+        float maxWidth = getWidth() * 0.80f;
+        float measured = paint.measureText(iconText);
+        if (measured > maxWidth && measured > 0f) {
+            paint.setTextSize(paint.getTextSize() * maxWidth / measured);
+        }
+        Paint.FontMetrics metrics = paint.getFontMetrics();
+        float baseline = getHeight() / 2f - (metrics.ascent + metrics.descent) / 2f;
+        canvas.drawText(iconText, getWidth() / 2f, baseline, paint);
+        paint.setTextAlign(Paint.Align.LEFT);
+    }
+
+    private void drawNumber(Canvas canvas, int faceColor) {
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(contrastTextColor(faceColor));
+        paint.setTypeface(Typeface.create("sans", Typeface.BOLD));
+        paint.setTextAlign(Paint.Align.CENTER);
+        float textSize = Math.min(getHeight() * 0.50f, getWidth() * 0.42f);
+        paint.setTextSize(Math.max(dp(10f), textSize));
         float maxWidth = getWidth() * 0.80f;
         float measured = paint.measureText(iconText);
         if (measured > maxWidth && measured > 0f) {
@@ -1781,7 +1979,13 @@ public final class CardTileView extends View {
             return;
         }
         String description;
-        if (!fallbackToShape) {
+        if (rubicsMode) {
+            description = rubicsSpokenDescription.isEmpty()
+                ? "Rubics cube face pattern " + (pairId + 1)
+                : rubicsSpokenDescription;
+        } else if (numberMode) {
+            description = "number " + iconText;
+        } else if (!fallbackToShape) {
             if (iconText.isEmpty()) {
                 // Blank mode relies entirely on color. A stable spoken label gives TalkBack users
                 // the same ability to recognize that two revealed cards carry the same cue.

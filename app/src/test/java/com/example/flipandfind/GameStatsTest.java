@@ -103,9 +103,80 @@ public final class GameStatsTest {
         assertEquals(0, stats.getCurrentStreak(0));
     }
 
+    @Test
+    public void decisionTimesUseEveryCompletedTimedAttemptAndKeepAllExtremeTies() {
+        GameStats stats = new GameStats(3);
+
+        stats.recordResolution(0, true, new int[] {1, 0, 0}, 400L);
+        stats.recordResolution(0, false, new int[] {1, 0, 0}, 600L);
+        stats.recordResolution(1, true, new int[] {1, 1, 0}, 500L);
+        stats.recordResolution(2, false, new int[] {1, 1, 0}, 900L);
+
+        assertEquals(2, stats.getTimedAttempts(0));
+        assertEquals(1_000L, stats.getDecisionTimeTotalMillis(0));
+        assertEquals(500L, stats.getAverageDecisionTimeMillis(0));
+        assertArrayEquals(new int[] {0, 1}, stats.getQuickestParticipants());
+        assertArrayEquals(new int[] {2}, stats.getSlowestParticipants());
+    }
+
+    @Test
+    public void decisionTimeExtremesCompareExactAveragesRatherThanRoundedValues() {
+        GameStats stats = new GameStats(2);
+        stats.recordResolution(0, false, new int[] {0, 0}, 1L);
+        stats.recordResolution(0, false, new int[] {0, 0}, 2L);
+        stats.recordResolution(1, false, new int[] {0, 0}, 2L);
+
+        assertEquals(2L, stats.getAverageDecisionTimeMillis(0));
+        assertEquals(2L, stats.getAverageDecisionTimeMillis(1));
+        assertArrayEquals(new int[] {0}, stats.getQuickestParticipants());
+        assertArrayEquals(new int[] {1}, stats.getSlowestParticipants());
+    }
+
+    @Test
+    public void participantsWithoutTimedAttemptsAreExcludedFromPaceResults() {
+        GameStats stats = new GameStats(2);
+        stats.recordAttempt(0, false);
+
+        assertEquals(GameStats.NO_DECISION_TIME, stats.getAverageDecisionTimeMillis(0));
+        assertArrayEquals(new int[0], stats.getQuickestParticipants());
+        assertArrayEquals(new int[0], stats.getSlowestParticipants());
+    }
+
+    @Test
+    public void timedSnapshotsAreDefensiveAndRestorePaceData() {
+        GameStats original = new GameStats(2);
+        original.recordResolution(0, true, new int[] {1, 0}, 700L);
+        original.recordResolution(1, false, new int[] {1, 0}, 1_300L);
+        long[] totals = original.copyDecisionTimeTotalsMillis();
+        int[] timedAttempts = original.copyTimedAttempts();
+
+        GameStats restored = GameStats.restore(
+            2,
+            original.copyAttempts(),
+            original.copyPairs(),
+            original.copyCurrentStreaks(),
+            original.copyLongestStreaks(),
+            original.copyMaxDeficits(),
+            totals,
+            timedAttempts
+        );
+        totals[0] = 99L;
+        timedAttempts[0] = 99;
+
+        assertArrayEquals(new long[] {700L, 1_300L}, restored.copyDecisionTimeTotalsMillis());
+        assertArrayEquals(new int[] {1, 1}, restored.copyTimedAttempts());
+        assertArrayEquals(new int[] {0}, restored.getQuickestParticipants());
+        assertArrayEquals(new int[] {1}, restored.getSlowestParticipants());
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void recordResolutionRejectsScoresThatDoNotMatchTheResolution() {
         new GameStats(2).recordResolution(0, true, new int[] {0, 0});
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void recordResolutionRejectsNegativeDecisionTime() {
+        new GameStats(2).recordResolution(0, false, new int[] {0, 0}, -1L);
     }
 
     @Test(expected = IllegalArgumentException.class)
@@ -161,6 +232,32 @@ public final class GameStatsTest {
             new int[] {2, 0},
             new int[] {2, 0},
             new int[] {0, 1}
+        );
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void restoreRejectsMoreTimedAttemptsThanCompletedAttempts() {
+        GameStats.restore(
+            new int[] {1},
+            new int[] {0},
+            new int[] {0},
+            new int[] {0},
+            new int[] {0},
+            new long[] {20L},
+            new int[] {2}
+        );
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void restoreRejectsDecisionTotalWithoutTimedAttempt() {
+        GameStats.restore(
+            new int[] {1},
+            new int[] {0},
+            new int[] {0},
+            new int[] {0},
+            new int[] {0},
+            new long[] {20L},
+            new int[] {0}
         );
     }
 

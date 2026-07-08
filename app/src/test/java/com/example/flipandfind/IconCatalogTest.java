@@ -15,7 +15,7 @@ import org.junit.Test;
 public final class IconCatalogTest {
     @Test
     public void exposesAllCategoriesWithLabelsAndSamples() {
-        assertEquals(12, IconCatalog.Category.values().length);
+        assertEquals(14, IconCatalog.Category.values().length);
 
         for (IconCatalog.Category category : IconCatalog.Category.values()) {
             assertFalse(category.getDisplayName().isEmpty());
@@ -28,6 +28,26 @@ public final class IconCatalogTest {
     public void wordAndBlankCategoriesUseVisualTileSamples() {
         assertEquals("📝", IconCatalog.Category.WORDS.getSample());
         assertEquals("🎨", IconCatalog.Category.BLANK.getSample());
+        assertEquals("▦", IconCatalog.Category.RUBICS.getSample());
+        assertEquals("123", IconCatalog.Category.NUMBERS.getSample());
+    }
+
+    @Test
+    public void addingRubicsPreservesEveryPreviouslyShippedOrdinal() {
+        assertEquals(0, IconCatalog.Category.RANDOM.ordinal());
+        assertEquals(1, IconCatalog.Category.FACES.ordinal());
+        assertEquals(2, IconCatalog.Category.ANIMALS.ordinal());
+        assertEquals(3, IconCatalog.Category.FOOD.ordinal());
+        assertEquals(4, IconCatalog.Category.NATURE.ordinal());
+        assertEquals(5, IconCatalog.Category.ACTIVITIES.ordinal());
+        assertEquals(6, IconCatalog.Category.TRAVEL.ordinal());
+        assertEquals(7, IconCatalog.Category.OBJECTS.ordinal());
+        assertEquals(8, IconCatalog.Category.FLAGS.ordinal());
+        assertEquals(9, IconCatalog.Category.SYMBOLS.ordinal());
+        assertEquals(10, IconCatalog.Category.WORDS.ordinal());
+        assertEquals(11, IconCatalog.Category.BLANK.ordinal());
+        assertEquals(12, IconCatalog.Category.RUBICS.ordinal());
+        assertEquals(13, IconCatalog.Category.NUMBERS.ordinal());
     }
 
     @Test
@@ -92,7 +112,9 @@ public final class IconCatalogTest {
         for (IconCatalog.Category category : IconCatalog.Category.values()) {
             if (category != IconCatalog.Category.RANDOM
                 && category != IconCatalog.Category.WORDS
-                && category != IconCatalog.Category.BLANK) {
+                && category != IconCatalog.Category.BLANK
+                && category != IconCatalog.Category.RUBICS
+                && category != IconCatalog.Category.NUMBERS) {
                 largestEmojiPool = Math.max(
                     largestEmojiPool,
                     IconCatalog.availableIconCount(category)
@@ -112,6 +134,8 @@ public final class IconCatalogTest {
             )) {
                 assertFalse("RANDOM included a word: " + label, isWord(label));
                 assertFalse("RANDOM included a blank label", label.isEmpty());
+                assertFalse("RANDOM included a Rubics face", RubicsFaceCatalog.isToken(label));
+                assertFalse("RANDOM included a number", NumberCatalog.isNumber(label));
             }
             for (String label : IconCatalog.trickyIconsFor(
                 IconCatalog.Category.RANDOM,
@@ -120,6 +144,11 @@ public final class IconCatalogTest {
             )) {
                 assertFalse("Tricky RANDOM included a word: " + label, isWord(label));
                 assertFalse("Tricky RANDOM included a blank label", label.isEmpty());
+                assertFalse(
+                    "Tricky RANDOM included a Rubics face",
+                    RubicsFaceCatalog.isToken(label)
+                );
+                assertFalse("Tricky RANDOM included a number", NumberCatalog.isNumber(label));
             }
         }
     }
@@ -208,6 +237,77 @@ public final class IconCatalogTest {
     }
 
     @Test
+    public void trickyRubicsFacesStayPairedAsOneStickerNeighbors() {
+        String[] labels = IconCatalog.trickyIconsFor(
+            IconCatalog.Category.RUBICS,
+            50,
+            1234L
+        );
+
+        assertEquals(50, new HashSet<>(Arrays.asList(labels)).size());
+        for (int index = 0; index < labels.length; index += 2) {
+            assertTrue(RubicsFaceCatalog.isToken(labels[index]));
+            assertTrue(RubicsFaceCatalog.isToken(labels[index + 1]));
+            assertEquals(
+                1,
+                RubicsFaceCatalog.hammingDistance(labels[index], labels[index + 1])
+            );
+        }
+    }
+
+    @Test
+    public void oddTrickyRubicsBoardsEndWithTheOneStickerTriple() {
+        Set<String> expectedTriple = new HashSet<>(RubicsFaceCatalog.trickyTriple());
+        for (int count : new int[] {5, 29, 49}) {
+            String[] labels = IconCatalog.trickyIconsFor(
+                IconCatalog.Category.RUBICS,
+                count,
+                321L
+            );
+            Set<String> actualTriple = new HashSet<>(Arrays.asList(
+                labels[count - 3],
+                labels[count - 2],
+                labels[count - 1]
+            ));
+            assertEquals(expectedTriple, actualTriple);
+        }
+    }
+
+    @Test
+    public void trickyNumbersStayPairedAsDigitSwaps() {
+        String[] labels = IconCatalog.trickyIconsFor(
+            IconCatalog.Category.NUMBERS,
+            50,
+            1234L
+        );
+
+        assertEquals(50, new HashSet<>(Arrays.asList(labels)).size());
+        for (int index = 0; index < labels.length; index += 2) {
+            assertTrue(NumberCatalog.isNumber(labels[index]));
+            assertTrue(NumberCatalog.isNumber(labels[index + 1]));
+            assertTrue(NumberCatalog.isSingleDigitSwap(labels[index], labels[index + 1]));
+        }
+    }
+
+    @Test
+    public void oddTrickyNumberBoardsEndWithTheSwapTriple() {
+        Set<String> expectedTriple = new HashSet<>(NumberCatalog.trickyTriple());
+        for (int count : new int[] {5, 29, 49}) {
+            String[] labels = IconCatalog.trickyIconsFor(
+                IconCatalog.Category.NUMBERS,
+                count,
+                321L
+            );
+            Set<String> actualTriple = new HashSet<>(Arrays.asList(
+                labels[count - 3],
+                labels[count - 2],
+                labels[count - 1]
+            ));
+            assertEquals(expectedTriple, actualTriple);
+        }
+    }
+
+    @Test
     public void everyTrickyCategorySupportsOneThroughFiftyLabels() {
         for (IconCatalog.Category category : IconCatalog.Category.values()) {
             for (int count : new int[] {1, 3, 4, 5, 12, 29, 30, 49, 50}) {
@@ -232,7 +332,9 @@ public final class IconCatalogTest {
     public void emojiCatalogAvoidsModernCompositionSequences() {
         for (IconCatalog.Category category : IconCatalog.Category.values()) {
             if (category == IconCatalog.Category.WORDS
-                || category == IconCatalog.Category.BLANK) {
+                || category == IconCatalog.Category.BLANK
+                || category == IconCatalog.Category.RUBICS
+                || category == IconCatalog.Category.NUMBERS) {
                 continue;
             }
             Set<String> labels = collectEntireCategory(category);
