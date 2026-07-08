@@ -74,6 +74,7 @@ public final class MainActivity extends Activity {
     private static final String USE_CARD_COLORS = "use_card_colors";
     private static final String TABLETOP_MODE = "tabletop_mode";
     private static final String CARD_BACK_STYLE = "card_back_style";
+    private static final String CARD_BACK_MODE = "card_back_mode";
     private static final String TURN_HANDOFF = "turn_handoff";
     private static final String SOUND_ENABLED = "sound_enabled";
     private static final String HAPTICS_ENABLED = "haptics_enabled";
@@ -148,6 +149,16 @@ public final class MainActivity extends Activity {
         final TextView name;
 
         CardBackOptionBinding(LinearLayout option, TextView name) {
+            this.option = option;
+            this.name = name;
+        }
+    }
+
+    private static final class TabletopOptionBinding {
+        final LinearLayout option;
+        final TextView name;
+
+        TabletopOptionBinding(LinearLayout option, TextView name) {
             this.option = option;
             this.name = name;
         }
@@ -268,6 +279,9 @@ public final class MainActivity extends Activity {
     private boolean useCardColors;
     private TabletopMode tabletopMode = TabletopMode.STATIC_THEME;
     private CardBackStyle cardBackStyle = CardBackStyle.CLASSIC;
+    private CardBackMode cardBackMode = CardBackMode.FIXED;
+    private CardBackSession cardBackSession;
+    private CardBackSelection activeCardBackSelection;
     private ThemePreset themePreset = ThemePreset.SYSTEM;
     private boolean darkTheme = true;
     private boolean turnHandoffEnabled;
@@ -300,6 +314,7 @@ public final class MainActivity extends Activity {
     private long pendingPairDecisionDurationMillis = GameStats.NO_DECISION_TIME;
     private CardTileView[] cardViews;
     private BoardLayout boardLayout;
+    private TabletopBackgroundDrawable tabletopBoardBackground;
     private int[] restoredBoardSlots;
     private PlayerProfileStore profileStore;
     private final List<EditText> profileNameInputs = new ArrayList<>();
@@ -379,6 +394,12 @@ public final class MainActivity extends Activity {
         cardBackStyle = CardBackStyle.fromPreference(
             settings.getString(CARD_BACK_STYLE, null)
         );
+        cardBackMode = CardBackMode.fromPreference(
+            settings.getString(CARD_BACK_MODE, null)
+        );
+        cardBackSession = new CardBackSession(
+            System.nanoTime() ^ SystemClock.elapsedRealtimeNanos()
+        );
         turnHandoffEnabled = settings.getBoolean(TURN_HANDOFF, false);
         soundEnabled = settings.getBoolean(SOUND_ENABLED, false);
         hapticsEnabled = settings.getBoolean(HAPTICS_ENABLED, true);
@@ -397,6 +418,23 @@ public final class MainActivity extends Activity {
         enterImmersiveMode();
 
         if (savedInstanceState != null) {
+            cardBackMode = CardBackMode.fromPreference(
+                savedInstanceState.getString(
+                    "cardBackMode",
+                    cardBackMode.getPreferenceId()
+                )
+            );
+            cardBackSession = CardBackSession.restore(
+                savedInstanceState.getLong(
+                    "cardBackSessionSeed",
+                    cardBackSession.getSessionSeed()
+                ),
+                savedInstanceState.getInt("cardBackRandomGamesStarted", 0),
+                savedInstanceState.getString(
+                    "cardBackPreviousRandomStyle",
+                    CardBackStyle.CLASSIC.getPreferenceId()
+                )
+            );
             int savedPlayers = clamp(
                 savedInstanceState.getInt("selectedPlayers", profileStore.size()),
                 GameState.MIN_HUMAN_PLAYERS,
@@ -493,6 +531,18 @@ public final class MainActivity extends Activity {
         outState.putBoolean("trickyMode", trickyMode);
         outState.putBoolean("swapAfterMiss", swapAfterMiss);
         outState.putBoolean("useCardColors", useCardColors);
+        outState.putString("cardBackMode", cardBackMode.getPreferenceId());
+        if (cardBackSession != null) {
+            outState.putLong("cardBackSessionSeed", cardBackSession.getSessionSeed());
+            outState.putInt(
+                "cardBackRandomGamesStarted",
+                cardBackSession.getRandomGamesStarted()
+            );
+            outState.putString(
+                "cardBackPreviousRandomStyle",
+                cardBackSession.getPreviousRandomGameStylePreferenceId()
+            );
+        }
         outState.putLong("pendingPhotoProfileId", pendingPhotoProfileId);
         outState.putBoolean("turnHandoffRequired", turnHandoffRequired);
 
@@ -514,6 +564,20 @@ public final class MainActivity extends Activity {
             }
             if (boardLayout != null) {
                 outState.putIntArray("boardSlots", boardLayout.copySlotPermutation());
+            }
+            if (activeCardBackSelection != null) {
+                outState.putString(
+                    "activeCardBackMode",
+                    activeCardBackSelection.getMode().getPreferenceId()
+                );
+                outState.putString(
+                    "activeCardBackUniformStyle",
+                    activeCardBackSelection.getSavedUniformStylePreferenceId()
+                );
+                outState.putLong(
+                    "activeCardBackSeed",
+                    activeCardBackSelection.getGameSeed()
+                );
             }
             if (gameStats != null) {
                 outState.putIntArray("statsAttempts", gameStats.copyAttempts());
@@ -581,6 +645,19 @@ public final class MainActivity extends Activity {
                 state.getInt("remainingPairs"),
                 state.getString("phase", GameState.Phase.WAITING_FIRST.name())
             );
+            activeCardBackSelection = state.containsKey("activeCardBackMode")
+                ? CardBackSelection.restore(
+                    state.getString(
+                        "activeCardBackMode",
+                        CardBackMode.FIXED.getPreferenceId()
+                    ),
+                    state.getString(
+                        "activeCardBackUniformStyle",
+                        cardBackStyle.getPreferenceId()
+                    ),
+                    state.getLong("activeCardBackSeed", boardLayoutSeed())
+                )
+                : CardBackSelection.fixed(cardBackStyle, boardLayoutSeed());
             computerMemory = ComputerMemory.restore(
                 selectedDifficulty,
                 state.getIntArray("memoryIndices"),
@@ -657,6 +734,7 @@ public final class MainActivity extends Activity {
             computerMemory = null;
             gameSeries = null;
             gameTimer = null;
+            activeCardBackSelection = null;
             resetPairDecisionClock();
             screen = Screen.SETUP;
         }
@@ -671,11 +749,13 @@ public final class MainActivity extends Activity {
         computerMemory = null;
         gameSeries = null;
         gameTimer = null;
+        activeCardBackSelection = null;
         lastGameDurationMillis = 0L;
         completedGameRecorded = false;
         resetPairDecisionClock();
         cardViews = null;
         boardLayout = null;
+        tabletopBoardBackground = null;
         restoredBoardSlots = null;
         profileNameInputs.clear();
         profileEditorIds.clear();
@@ -1025,8 +1105,13 @@ public final class MainActivity extends Activity {
         computerMemory = null;
         cardViews = null;
         boardLayout = null;
+        tabletopBoardBackground = null;
         restoredBoardSlots = null;
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        FrameLayout advancedHost = new FrameLayout(this);
+        applyScreenBackground(advancedHost);
+        applySafeCutoutInsets(advancedHost);
 
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
@@ -1035,7 +1120,13 @@ public final class MainActivity extends Activity {
             (view, scrollX, scrollY, oldScrollX, oldScrollY) ->
                 CardBackAnimationTicker.wake()
         );
-        applySafeCutoutInsets(scroll);
+        advancedHost.addView(
+            scroll,
+            new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        );
 
         LinearLayout content = verticalLayout();
         content.setPadding(dp(22), dp(22), dp(22), dp(32));
@@ -1045,12 +1136,11 @@ public final class MainActivity extends Activity {
         heading.setGravity(Gravity.CENTER_VERTICAL);
         content.addView(heading, matchWrap());
 
-        TextView back = label("‹", 32, INK, false);
-        back.setGravity(Gravity.CENTER);
-        back.setContentDescription("Back to game setup");
-        back.setBackground(ripple(SURFACE_TINT, 14));
-        back.setOnClickListener(view -> showSetupScreen());
-        heading.addView(back, fixed(dp(48), dp(48)));
+        View backPlaceholder = new View(this);
+        backPlaceholder.setImportantForAccessibility(
+            View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        );
+        heading.addView(backPlaceholder, fixed(dp(48), dp(48)));
 
         LinearLayout titleBlock = verticalLayout();
         heading.addView(
@@ -1326,29 +1416,67 @@ public final class MainActivity extends Activity {
         );
         tabletopCard.addView(
             label(
-                "The game surround still follows the current player. Choose how the inner tabletop is colored.",
+                "Choose a plain surface or a pattern. Pattern accents follow the current player.",
                 13,
                 MUTED,
                 false
             ),
             margins(matchWrap(), 0, 5, 0, 0)
         );
-        EnumMap<TabletopMode, LinearLayout> tabletopBindings =
+        EnumMap<TabletopMode, TabletopOptionBinding> tabletopBindings =
             new EnumMap<>(TabletopMode.class);
         for (TabletopMode mode : TabletopMode.values()) {
             boolean selected = mode == tabletopMode;
-            String description = mode == TabletopMode.STATIC_THEME
-                ? "Pure black in dark themes and pure white in light themes."
-                : "A subtle shade of the current player's color.";
-            LinearLayout choice = advancedChoice(
-                mode.getDisplayName(),
-                description,
-                selected
+            LinearLayout choice = horizontalLayout();
+            choice.setGravity(Gravity.CENTER_VERTICAL);
+            choice.setMinimumHeight(dp(76));
+            choice.setPadding(dp(11), dp(10), dp(13), dp(10));
+            choice.setFocusable(true);
+            choice.setClickable(true);
+            choice.setSelected(selected);
+
+            View preview = new View(this);
+            preview.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            preview.setBackground(tabletopBackground(
+                mode,
+                PRIMARY,
+                themedRadius(10),
+                0x51A7E000 ^ mode.ordinal()
+            ));
+            choice.addView(preview, fixed(dp(58), dp(46)));
+
+            LinearLayout tabletopCopy = verticalLayout();
+            tabletopCopy.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
             );
+            choice.addView(
+                tabletopCopy,
+                margins(weighted(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f), 12, 0, 0, 0)
+            );
+            TextView choiceName = label(
+                (selected ? "✓ " : "") + mode.getDisplayName(),
+                15,
+                selected ? PRIMARY_DARK : INK,
+                true
+            );
+            tabletopCopy.addView(choiceName, matchWrap());
+            TextView choiceDescription = label(mode.getDescription(), 12, MUTED, false);
+            choiceDescription.setLineSpacing(0f, 1.06f);
+            tabletopCopy.addView(
+                choiceDescription,
+                margins(matchWrap(), 0, 4, 0, 0)
+            );
+            choice.setBackground(outlined(
+                selected ? SURFACE_TINT : SURFACE,
+                selected ? PRIMARY : DIVIDER,
+                selected ? 2 : 1,
+                15
+            ));
             choice.setContentDescription(
-                mode.getDisplayName() + (selected ? ", selected" : ", not selected")
+                mode.getDisplayName() + ". " + mode.getDescription()
+                    + (selected ? ", selected" : ", not selected")
             );
-            tabletopBindings.put(mode, choice);
+            tabletopBindings.put(mode, new TabletopOptionBinding(choice, choiceName));
             choice.setOnClickListener(view -> {
                 if (tabletopMode == mode) {
                     return;
@@ -1378,7 +1506,7 @@ public final class MainActivity extends Activity {
         );
         cardBackCard.addView(
             label(
-                "Choose a design for face-down cards.",
+                "Pick one design, change it after every game, or mix stable random backs on one table. Game random starts with Classic after each app restart.",
                 13,
                 MUTED,
                 false
@@ -1391,6 +1519,13 @@ public final class MainActivity extends Activity {
         cardBackCard.addView(cardBackFlow, margins(matchWrap(), 0, 10, 0, 0));
         EnumMap<CardBackStyle, CardBackOptionBinding> cardBackBindings =
             new EnumMap<>(CardBackStyle.class);
+        EnumMap<CardBackMode, CardBackOptionBinding> cardBackModeBindings =
+            new EnumMap<>(CardBackMode.class);
+        addCardBackModeOptions(
+            cardBackFlow,
+            cardBackBindings,
+            cardBackModeBindings
+        );
         for (CardBackStyle style : CardBackStyle.values()) {
             LinearLayout option = verticalLayout();
             option.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -1418,22 +1553,25 @@ public final class MainActivity extends Activity {
                 true
             );
             optionName.setGravity(Gravity.CENTER);
-            optionName.setSingleLine(true);
+            optionName.setMaxLines(2);
             option.addView(optionName, margins(matchWrap(), 0, 7, 0, 0));
             cardBackBindings.put(
                 style,
                 new CardBackOptionBinding(option, optionName)
             );
             option.setOnClickListener(view -> {
-                if (screen != Screen.ADVANCED || cardBackStyle == style) {
+                if (screen != Screen.ADVANCED
+                    || (cardBackMode == CardBackMode.FIXED && cardBackStyle == style)) {
                     return;
                 }
                 cardBackStyle = style;
+                cardBackMode = CardBackMode.FIXED;
                 getSharedPreferences(SETTINGS, MODE_PRIVATE)
                     .edit()
                     .putString(CARD_BACK_STYLE, style.getPreferenceId())
+                    .putString(CARD_BACK_MODE, cardBackMode.getPreferenceId())
                     .apply();
-                renderCardBackSelection(cardBackBindings);
+                renderCardBackSelection(cardBackBindings, cardBackModeBindings);
                 view.announceForAccessibility(
                     style.getDisplayName() + " card back selected"
                 );
@@ -1441,20 +1579,28 @@ public final class MainActivity extends Activity {
 
             ViewGroup.MarginLayoutParams optionParams = new ViewGroup.MarginLayoutParams(
                 dp(98),
-                dp(116)
+                dp(128)
             );
             cardBackFlow.addView(option, optionParams);
         }
-        renderCardBackSelection(cardBackBindings);
+        renderCardBackSelection(cardBackBindings, cardBackModeBindings);
 
-        TextView done = actionButton("DONE", PRIMARY, contrastTextColor(PRIMARY));
-        done.setOnClickListener(view -> showSetupScreen());
-        content.addView(
-            done,
-            margins(fixed(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)), 0, 6, 0, 0)
+        TextView back = label("‹", 32, INK, false);
+        back.setGravity(Gravity.CENTER);
+        back.setFocusable(true);
+        back.setContentDescription("Back to game setup");
+        back.setBackground(ripple(SURFACE_TINT, 14));
+        back.setElevation(dp(themedElevation(4)));
+        back.setOnClickListener(view -> showSetupScreen());
+        FrameLayout.LayoutParams backParams = new FrameLayout.LayoutParams(
+            dp(48),
+            dp(48),
+            Gravity.TOP | Gravity.START
         );
+        backParams.setMargins(dp(22), dp(22), 0, 0);
+        advancedHost.addView(back, backParams);
 
-        setContentView(scroll);
+        setContentView(advancedHost);
         enterImmersiveMode();
         int scrollTarget = pendingAdvancedScrollY;
         pendingAdvancedScrollY = -1;
@@ -1465,29 +1611,27 @@ public final class MainActivity extends Activity {
     }
 
     private void renderTabletopSelection(
-        EnumMap<TabletopMode, LinearLayout> bindings
+        EnumMap<TabletopMode, TabletopOptionBinding> bindings
     ) {
         for (TabletopMode mode : TabletopMode.values()) {
-            LinearLayout choice = bindings.get(mode);
-            if (choice == null) {
+            TabletopOptionBinding binding = bindings.get(mode);
+            if (binding == null) {
                 continue;
             }
             boolean selected = mode == tabletopMode;
-            choice.setSelected(selected);
-            choice.setBackground(outlined(
+            binding.option.setSelected(selected);
+            binding.option.setBackground(outlined(
                 selected ? SURFACE_TINT : SURFACE,
                 selected ? PRIMARY : DIVIDER,
                 selected ? 2 : 1,
                 15
             ));
-            choice.setContentDescription(
-                mode.getDisplayName() + (selected ? ", selected" : ", not selected")
+            binding.option.setContentDescription(
+                mode.getDisplayName() + ". " + mode.getDescription()
+                    + (selected ? ", selected" : ", not selected")
             );
-            if (choice.getChildCount() > 0 && choice.getChildAt(0) instanceof TextView) {
-                TextView title = (TextView) choice.getChildAt(0);
-                title.setText((selected ? "✓ " : "") + mode.getDisplayName());
-                title.setTextColor(selected ? PRIMARY_DARK : INK);
-            }
+            binding.name.setText((selected ? "✓ " : "") + mode.getDisplayName());
+            binding.name.setTextColor(selected ? PRIMARY_DARK : INK);
         }
     }
 
@@ -1502,13 +1646,24 @@ public final class MainActivity extends Activity {
         gameTimer = null;
         cardViews = null;
         boardLayout = null;
+        tabletopBoardBackground = null;
         restoredBoardSlots = null;
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        FrameLayout historyHost = new FrameLayout(this);
+        applyScreenBackground(historyHost);
+        applySafeCutoutInsets(historyHost);
 
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         applyScreenBackground(scroll);
-        applySafeCutoutInsets(scroll);
+        historyHost.addView(
+            scroll,
+            new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        );
 
         LinearLayout content = verticalLayout();
         content.setPadding(dp(22), dp(22), dp(22), dp(32));
@@ -1518,12 +1673,11 @@ public final class MainActivity extends Activity {
         heading.setGravity(Gravity.CENTER_VERTICAL);
         content.addView(heading, matchWrap());
 
-        TextView back = label("‹", 32, INK, false);
-        back.setGravity(Gravity.CENTER);
-        back.setContentDescription("Back to game setup");
-        back.setBackground(ripple(SURFACE_TINT, 14));
-        back.setOnClickListener(view -> showSetupScreen());
-        heading.addView(back, fixed(dp(48), dp(48)));
+        View backPlaceholder = new View(this);
+        backPlaceholder.setImportantForAccessibility(
+            View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        );
+        heading.addView(backPlaceholder, fixed(dp(48), dp(48)));
 
         LinearLayout titleBlock = verticalLayout();
         heading.addView(
@@ -1626,14 +1780,22 @@ public final class MainActivity extends Activity {
             }
         }
 
-        TextView done = actionButton("DONE", PRIMARY, contrastTextColor(PRIMARY));
-        done.setOnClickListener(view -> showSetupScreen());
-        content.addView(
-            done,
-            margins(fixed(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)), 0, 18, 0, 0)
+        TextView back = label("‹", 32, INK, false);
+        back.setGravity(Gravity.CENTER);
+        back.setFocusable(true);
+        back.setContentDescription("Back to game setup");
+        back.setBackground(ripple(SURFACE_TINT, 14));
+        back.setElevation(dp(themedElevation(4)));
+        back.setOnClickListener(view -> showSetupScreen());
+        FrameLayout.LayoutParams backParams = new FrameLayout.LayoutParams(
+            dp(48),
+            dp(48),
+            Gravity.TOP | Gravity.START
         );
+        backParams.setMargins(dp(22), dp(22), 0, 0);
+        historyHost.addView(back, backParams);
 
-        setContentView(scroll);
+        setContentView(historyHost);
         enterImmersiveMode();
     }
 
@@ -1720,15 +1882,98 @@ public final class MainActivity extends Activity {
         keepDialogImmersive(dialog);
     }
 
+    private void addCardBackModeOptions(
+        FlowLayout cardBackFlow,
+        EnumMap<CardBackStyle, CardBackOptionBinding> styleBindings,
+        EnumMap<CardBackMode, CardBackOptionBinding> modeBindings
+    ) {
+        for (CardBackMode mode : new CardBackMode[] {
+            CardBackMode.RANDOM_EACH_GAME,
+            CardBackMode.RANDOM_EACH_CARD
+        }) {
+            LinearLayout option = verticalLayout();
+            option.setGravity(Gravity.CENTER_HORIZONTAL);
+            option.setPadding(dp(7), dp(8), dp(7), dp(7));
+            option.setFocusable(true);
+            option.setClickable(true);
+            option.addView(cardBackModePreview(mode), centered(dp(54), dp(66)));
+
+            TextView optionName = label(mode.getDisplayName(), 10, INK, true);
+            optionName.setGravity(Gravity.CENTER);
+            optionName.setMaxLines(2);
+            option.addView(optionName, margins(matchWrap(), 0, 7, 0, 0));
+            modeBindings.put(mode, new CardBackOptionBinding(option, optionName));
+            option.setOnClickListener(view -> {
+                if (screen != Screen.ADVANCED || cardBackMode == mode) {
+                    return;
+                }
+                cardBackMode = mode;
+                getSharedPreferences(SETTINGS, MODE_PRIVATE)
+                    .edit()
+                    .putString(CARD_BACK_MODE, mode.getPreferenceId())
+                    .apply();
+                renderCardBackSelection(styleBindings, modeBindings);
+                view.announceForAccessibility(
+                    mode.getDisplayName() + " card-back mode selected"
+                );
+            });
+            cardBackFlow.addView(
+                option,
+                new ViewGroup.MarginLayoutParams(dp(98), dp(128))
+            );
+        }
+    }
+
+    private FrameLayout cardBackModePreview(CardBackMode mode) {
+        FrameLayout previewHost = new FrameLayout(this);
+        CardBackStyle[] previewStyles = mode == CardBackMode.RANDOM_EACH_GAME
+            ? new CardBackStyle[] {CardBackStyle.CLASSIC, CardBackStyle.ORBITS}
+            : new CardBackStyle[] {
+                CardBackStyle.CONSTELLATION,
+                CardBackStyle.WAVES,
+                CardBackStyle.PRISM
+            };
+        int cardWidth = previewStyles.length == 2 ? 37 : 33;
+        int step = previewStyles.length == 2 ? 17 : 10;
+        int start = previewStyles.length == 2 ? 0 : 1;
+        for (int index = 0; index < previewStyles.length; index++) {
+            CardTileView preview = new CardTileView(this);
+            preview.setCornerRadiusFraction(cardCornerRadiusFraction());
+            preview.setCardNumber(40 + index);
+            preview.setReducedMotion(reducedMotion);
+            preview.setCardBackStyle(previewStyles[index]);
+            preview.setClickable(false);
+            preview.setFocusable(false);
+            preview.setEnabled(false);
+            preview.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            );
+            preview.setRotation((index - (previewStyles.length - 1) / 2f) * 6f);
+            FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                dp(cardWidth),
+                dp(54)
+            );
+            params.leftMargin = dp(start + index * step);
+            params.topMargin = dp(6);
+            previewHost.addView(preview, params);
+        }
+        previewHost.setImportantForAccessibility(
+            View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        );
+        return previewHost;
+    }
+
     private void renderCardBackSelection(
-        EnumMap<CardBackStyle, CardBackOptionBinding> bindings
+        EnumMap<CardBackStyle, CardBackOptionBinding> styleBindings,
+        EnumMap<CardBackMode, CardBackOptionBinding> modeBindings
     ) {
         for (CardBackStyle style : CardBackStyle.values()) {
-            CardBackOptionBinding binding = bindings.get(style);
+            CardBackOptionBinding binding = styleBindings.get(style);
             if (binding == null) {
                 continue;
             }
-            boolean selected = style == cardBackStyle;
+            boolean selected = cardBackMode == CardBackMode.FIXED
+                && style == cardBackStyle;
             binding.option.setSelected(selected);
             binding.option.setBackground(outlined(
                 selected ? SURFACE_TINT : SURFACE,
@@ -1748,6 +1993,34 @@ public final class MainActivity extends Activity {
             );
             binding.name.setTextColor(selected ? PRIMARY_DARK : INK);
         }
+        for (CardBackMode mode : new CardBackMode[] {
+            CardBackMode.RANDOM_EACH_GAME,
+            CardBackMode.RANDOM_EACH_CARD
+        }) {
+            CardBackOptionBinding binding = modeBindings.get(mode);
+            if (binding == null) {
+                continue;
+            }
+            boolean selected = cardBackMode == mode;
+            binding.option.setSelected(selected);
+            binding.option.setBackground(outlined(
+                selected ? SURFACE_TINT : SURFACE,
+                selected ? PRIMARY : DIVIDER,
+                selected ? 2 : 1,
+                16
+            ));
+            binding.option.setContentDescription(
+                mode.getDisplayName() + ", "
+                    + (mode == CardBackMode.RANDOM_EACH_GAME
+                        ? "starts with Classic after app restart, then changes each game"
+                        : "uses stable random designs across cards in one game")
+                    + ", " + (selected ? "selected" : "not selected")
+            );
+            binding.name.setText(
+                (selected ? "✓ " : "") + mode.getDisplayName()
+            );
+            binding.name.setTextColor(selected ? PRIMARY_DARK : INK);
+        }
     }
 
     private LinearLayout advancedSettingsCard() {
@@ -1756,33 +2029,6 @@ public final class MainActivity extends Activity {
         card.setBackground(rounded(SURFACE, 20));
         card.setElevation(dp(themedElevation(2)));
         return card;
-    }
-
-    private LinearLayout advancedChoice(
-        String title,
-        String description,
-        boolean selected
-    ) {
-        LinearLayout choice = verticalLayout();
-        choice.setMinimumHeight(dp(64));
-        choice.setPadding(dp(13), dp(11), dp(13), dp(11));
-        choice.setFocusable(true);
-        choice.setClickable(true);
-        choice.setBackground(outlined(
-            selected ? SURFACE_TINT : SURFACE,
-            selected ? PRIMARY : DIVIDER,
-            selected ? 2 : 1,
-            15
-        ));
-        choice.addView(
-            label((selected ? "✓ " : "") + title, 15, selected ? PRIMARY_DARK : INK, true),
-            matchWrap()
-        );
-        choice.addView(
-            label(description, 12, MUTED, false),
-            margins(matchWrap(), 0, 4, 0, 0)
-        );
-        return choice;
     }
 
     private LinearLayout advancedToggle(
@@ -1834,6 +2080,7 @@ public final class MainActivity extends Activity {
         computerMemory = null;
         cardViews = null;
         boardLayout = null;
+        tabletopBoardBackground = null;
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         ScrollView scroll = new ScrollView(this);
@@ -2690,6 +2937,19 @@ public final class MainActivity extends Activity {
 
     private void startGameRound(boolean keepSeries) {
         game = new GameState(selectedHumanPlayers, selectedPairs);
+        if (cardBackSession == null) {
+            cardBackSession = new CardBackSession(
+                System.nanoTime() ^ SystemClock.elapsedRealtimeNanos()
+            );
+        }
+        long cardBackGameSeed = System.nanoTime()
+            ^ boardLayoutSeed()
+            ^ Long.rotateLeft(cardBackSession.getSessionSeed(), 17);
+        activeCardBackSelection = cardBackSession.beginGame(
+            cardBackMode,
+            cardBackStyle,
+            cardBackGameSeed
+        );
         String[] participantNames = currentParticipantNames();
         if (!keepSeries
             || gameSeries == null
@@ -2710,6 +2970,12 @@ public final class MainActivity extends Activity {
 
     private void showGameScreen() {
         cancelPendingActions();
+        if (activeCardBackSelection == null) {
+            activeCardBackSelection = CardBackSelection.fixed(
+                cardBackStyle,
+                boardLayoutSeed()
+            );
+        }
         screen = Screen.GAME;
         setWindowBackground(playerColor(game.getCurrentPlayer()));
         turnHandoffOverlay = null;
@@ -2719,6 +2985,7 @@ public final class MainActivity extends Activity {
         renderedScores = null;
         scoreChipViews = null;
         playerChromeApplied = false;
+        tabletopBoardBackground = null;
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         gameHost = new FrameLayout(this);
@@ -2810,12 +3077,13 @@ public final class MainActivity extends Activity {
         boardLayout.setLargerCards(largerCards);
         boardLayout.setPadding(dp(7), dp(7), dp(7), dp(7));
         int activePlayerColor = playerColor(game.getCurrentPlayer());
-        boardLayout.setBackground(outlined(
-            gameTabletopFill(activePlayerColor),
-            gameTabletopBorder(activePlayerColor),
-            1,
-            20
-        ));
+        tabletopBoardBackground = tabletopBackground(
+            tabletopMode,
+            activePlayerColor,
+            themedRadius(20),
+            (int) boardLayoutSeed()
+        );
+        boardLayout.setBackground(tabletopBoardBackground);
         boardLayout.setElevation(dp(themedElevation(2)));
         gameBoardSection.addView(
             boardLayout,
@@ -2836,7 +3104,7 @@ public final class MainActivity extends Activity {
             CardTileView card = new CardTileView(this);
             card.setCornerRadiusFraction(cardCornerRadiusFraction());
             card.setCardNumber(index + 1);
-            card.setCardBackStyle(cardBackStyle);
+            card.setCardBackStyle(activeCardBackSelection.styleForCard(index));
             card.setReducedMotion(reducedMotion);
             card.setHighContrast(highContrast);
             card.setColorBlindPatterns(colorBlindPalette);
@@ -3434,12 +3702,18 @@ public final class MainActivity extends Activity {
             gameBoardSection.setBackground(gameSurroundBackground(playerBackground));
         }
         if (boardLayout != null) {
-            boardLayout.setBackground(outlined(
-                gameTabletopFill(playerBackground),
-                gameTabletopBorder(playerBackground),
-                1,
-                20
-            ));
+            if (tabletopBoardBackground == null
+                || tabletopBoardBackground.getMode() != tabletopMode) {
+                tabletopBoardBackground = tabletopBackground(
+                    tabletopMode,
+                    playerBackground,
+                    themedRadius(20),
+                    (int) boardLayoutSeed()
+                );
+                boardLayout.setBackground(tabletopBoardBackground);
+            } else {
+                tabletopBoardBackground.setPlayerColor(playerBackground);
+            }
         }
         setWindowBackground(playerBackground);
         appliedPlayerChromeColor = playerBackground;
@@ -3487,23 +3761,21 @@ public final class MainActivity extends Activity {
         return background;
     }
 
-    private int gameTabletopFill(int playerColor) {
-        return GameSurfaceColors.tabletop(
-            tabletopMode,
-            playerColor,
-            SURFACE,
-            darkTheme
-        );
-    }
-
-    private int gameTabletopBorder(int playerColor) {
-        return GameSurfaceColors.tabletopBorder(
-            tabletopMode,
+    private TabletopBackgroundDrawable tabletopBackground(
+        TabletopMode mode,
+        int playerColor,
+        float radiusDp,
+        int patternSeed
+    ) {
+        return new TabletopBackgroundDrawable(
+            this,
+            mode,
             playerColor,
             SURFACE,
             DIVIDER,
-            darkTheme
-        );
+            darkTheme,
+            radiusDp
+        ).setPatternSeed(patternSeed);
     }
 
     private void renderScoreRow() {

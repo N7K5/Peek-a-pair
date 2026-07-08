@@ -4,9 +4,9 @@
 
 Peek-a-Pair is an offline, pass-the-device memory game for solo play against a bot or for 2–15 local players. Scatter up to 50 matching pairs across the tabletop, personalize the challenge, and keep a record of every round—without accounts, ads, or cloud services.
 
-[Download the v3.3.0 debug APK](dist/Peek-a-Pair-debug.apk)
+[Download the v3.4.0 debug APK](dist/Peek-a-Pair-debug.apk)
 
-[Read the v3.3.0 release notes](RELEASE_NOTES.md)
+[Read the v3.4.0 release notes](RELEASE_NOTES.md)
 
 ## At a glance
 
@@ -18,7 +18,7 @@ Peek-a-Pair is an offline, pass-the-device memory game for solo play against a b
 | Android | Android 6.0 (API 23) or newer |
 | Orientation | Portrait, immersive full screen |
 | Connectivity | Fully offline; no network permission |
-| Current version | 3.3.0 (`versionCode 24`) |
+| Current version | 3.4.0 (`versionCode 25`) |
 
 ## How to play
 
@@ -54,8 +54,10 @@ Matched cards make a quick shrinking flight into the current player's score and 
 
 - Themes range from system-aware minimal styles to Mixed Bubble, Aurora Glass, Neon Arcade, Paper Table, and vivid light or dark palettes.
 - Fifteen card-back designs are included. Orbits, Aurora, Fireflies, Kaleido, Comet Trails, Moon Ripples, and Pixel Rain animate while visible.
+- **Random each game** starts with Classic after every app restart, then avoids repeating the previous design. **Random across cards** gives each physical card a stable shuffled design for that round.
 - Several card backs use stable per-card variations, making visual tracking part of the challenge.
-- The game surround follows the active player's color; the inner tabletop can stay theme black/white or use a subtle player tint.
+- The game surround follows the active player's color. The inner tabletop offers plain theme/player surfaces plus Tiles, Mosaic, Glass tiles, Dots, and Contours, with a live preview for every choice.
+- Advanced Settings and Game History use a sticky top-left back button, keeping navigation visible without an extra Done action.
 
 ### Accessibility and comfort
 
@@ -147,8 +149,8 @@ The project uses Gradle 8.12, Android Gradle Plugin 8.7.3, and JUnit 4 for its p
 |---|---|
 | Screens, navigation, settings, and themes | [`MainActivity.java`](app/src/main/java/com/example/flipandfind/MainActivity.java) |
 | Game rules and ranking | [`GameState.java`](app/src/main/java/com/example/flipandfind/GameState.java), [`Rankings.java`](app/src/main/java/com/example/flipandfind/Rankings.java) |
-| Scattered board layout | [`BoardLayout.java`](app/src/main/java/com/example/flipandfind/BoardLayout.java), [`ScatterLayoutEngine.java`](app/src/main/java/com/example/flipandfind/ScatterLayoutEngine.java) |
-| Card rendering and animated backs | [`CardTileView.java`](app/src/main/java/com/example/flipandfind/CardTileView.java), [`RubicsFaceCatalog.java`](app/src/main/java/com/example/flipandfind/RubicsFaceCatalog.java), [`NumberCatalog.java`](app/src/main/java/com/example/flipandfind/NumberCatalog.java), [`CardBackStyle.java`](app/src/main/java/com/example/flipandfind/CardBackStyle.java), [`CardBackAnimationTicker.java`](app/src/main/java/com/example/flipandfind/CardBackAnimationTicker.java) |
+| Scattered board and tabletop surfaces | [`BoardLayout.java`](app/src/main/java/com/example/flipandfind/BoardLayout.java), [`ScatterLayoutEngine.java`](app/src/main/java/com/example/flipandfind/ScatterLayoutEngine.java), [`TabletopMode.java`](app/src/main/java/com/example/flipandfind/TabletopMode.java), [`TabletopBackgroundDrawable.java`](app/src/main/java/com/example/flipandfind/TabletopBackgroundDrawable.java) |
+| Card rendering and animated backs | [`CardTileView.java`](app/src/main/java/com/example/flipandfind/CardTileView.java), [`RubicsFaceCatalog.java`](app/src/main/java/com/example/flipandfind/RubicsFaceCatalog.java), [`NumberCatalog.java`](app/src/main/java/com/example/flipandfind/NumberCatalog.java), [`CardBackStyle.java`](app/src/main/java/com/example/flipandfind/CardBackStyle.java), [`CardBackMode.java`](app/src/main/java/com/example/flipandfind/CardBackMode.java), [`CardBackSelection.java`](app/src/main/java/com/example/flipandfind/CardBackSelection.java), [`CardBackAnimationTicker.java`](app/src/main/java/com/example/flipandfind/CardBackAnimationTicker.java) |
 | Bot behavior | [`ComputerMemory.java`](app/src/main/java/com/example/flipandfind/ComputerMemory.java), [`ComputerDifficulty.java`](app/src/main/java/com/example/flipandfind/ComputerDifficulty.java) |
 | Statistics, series, and local history | [`GameStats.java`](app/src/main/java/com/example/flipandfind/GameStats.java), [`GameSeries.java`](app/src/main/java/com/example/flipandfind/GameSeries.java), [`GameHistory.java`](app/src/main/java/com/example/flipandfind/GameHistory.java) |
 | JVM unit tests | [`app/src/test`](app/src/test/java/com/example/flipandfind) |

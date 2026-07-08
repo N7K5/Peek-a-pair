@@ -75,6 +75,20 @@ public final class GameSurfaceColorsTest {
     }
 
     @Test
+    public void everyPatternModeRetainsTheCurrentPlayerTint() {
+        int surface = 0xFF1D2130;
+        for (TabletopMode mode : TabletopMode.values()) {
+            if (!mode.hasPattern()) {
+                continue;
+            }
+            assertNotEquals(
+                GameSurfaceColors.tabletop(mode, 0xFF5B4BDB, surface, true),
+                GameSurfaceColors.tabletop(mode, 0xFFF59E0B, surface, true)
+            );
+        }
+    }
+
+    @Test
     public void tabletopIsOpaqueAndRetainsPlayerIdentity() {
         int surface = 0xFF1D2130;
         int violet = 0xFF5B4BDB;

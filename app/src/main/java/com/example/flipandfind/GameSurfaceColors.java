@@ -15,7 +15,7 @@ public final class GameSurfaceColors {
         int themeSurface,
         boolean darkTheme
     ) {
-        if (mode == null || mode == TabletopMode.STATIC_THEME) {
+        if (mode == null || !mode.isPlayerTinted()) {
             return darkTheme ? 0xFF000000 : 0xFFFFFFFF;
         }
         return tabletop(playerColor, themeSurface, darkTheme);
@@ -28,7 +28,7 @@ public final class GameSurfaceColors {
         int neutralBorder,
         boolean darkTheme
     ) {
-        if (mode == null || mode == TabletopMode.STATIC_THEME) {
+        if (mode == null || !mode.isPlayerTinted()) {
             return neutralBorder | 0xFF000000;
         }
         return tabletopBorder(playerColor, themeSurface, darkTheme);
