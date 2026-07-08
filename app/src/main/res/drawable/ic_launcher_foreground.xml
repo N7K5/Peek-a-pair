@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!--
+        Keep the complete card pair inside Android's central 66 x 66 adaptive-icon
+        safe circle. The rotated artwork occupies approximately x=29.5..78.5 and
+        y=34..75, so circle and aggressively rounded-square masks cannot trim it.
+    -->
+    <path
+        android:fillAlpha="0.14"
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,25A29,29 0,1 1,54,83A29,29 0,1 1,54,25Z" />
+
+    <group
+        android:pivotX="43"
+        android:pivotY="55"
+        android:rotation="-5">
+        <path
+            android:fillAlpha="0.38"
+            android:fillColor="#000000"
+            android:pathData="M36,37H50C52.8,37 55,39.2 55,42V68C55,70.8 52.8,73 50,73H36C33.2,73 31,70.8 31,68V42C31,39.2 33.2,37 36,37Z" />
+    </group>
+
+    <group
+        android:pivotX="43"
+        android:pivotY="53"
+        android:rotation="-5">
+        <path
+            android:fillColor="#7C5CFC"
+            android:pathData="M36,35H50C52.8,35 55,37.2 55,40V66C55,68.8 52.8,71 50,71H36C33.2,71 31,68.8 31,66V40C31,37.2 33.2,35 36,35Z"
+            android:strokeAlpha="0.82"
+            android:strokeColor="#FFFFFF"
+            android:strokeLineJoin="round"
+            android:strokeWidth="1.5" />
+        <path
+            android:fillAlpha="0.22"
+            android:fillColor="#FFFFFF"
+            android:pathData="M36,38H50C51.1,38 52,38.9 52,40V42H34V40C34,38.9 34.9,38 36,38Z" />
+        <path
+            android:fillColor="#FFF3C4"
+            android:pathData="M43,44.5L45.25,50.75L51.5,53L45.25,55.25L43,61.5L40.75,55.25L34.5,53L40.75,50.75Z" />
+    </group>
+
+    <group
+        android:pivotX="65"
+        android:pivotY="56"
+        android:rotation="5">
+        <path
+            android:fillAlpha="0.42"
+            android:fillColor="#000000"
+            android:pathData="M58,38H72C74.8,38 77,40.2 77,43V69C77,71.8 74.8,74 72,74H58C55.2,74 53,71.8 53,69V43C53,40.2 55.2,38 58,38Z" />
+    </group>
+
+    <group
+        android:pivotX="65"
+        android:pivotY="54"
+        android:rotation="5">
+        <path
+            android:fillColor="#FFAD42"
+            android:pathData="M58,36H72C74.8,36 77,38.2 77,41V67C77,69.8 74.8,72 72,72H58C55.2,72 53,69.8 53,67V41C53,38.2 55.2,36 58,36Z"
+            android:strokeAlpha="0.88"
+            android:strokeColor="#FFFFFF"
+            android:strokeLineJoin="round"
+            android:strokeWidth="1.5" />
+        <path
+            android:fillAlpha="0.26"
+            android:fillColor="#FFFFFF"
+            android:pathData="M58,39H72C73.1,39 74,39.9 74,41V43H56V41C56,39.9 56.9,39 58,39Z" />
+        <path
+            android:fillColor="#FFF3C4"
+            android:pathData="M65,45.5L67.25,51.75L73.5,54L67.25,56.25L65,62.5L62.75,56.25L56.5,54L62.75,51.75Z" />
+    </group>
+</vector>
