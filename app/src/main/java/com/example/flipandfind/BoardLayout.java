@@ -15,7 +15,6 @@ import java.util.List;
 
 /** A deterministic random tabletop constrained to exactly the available screen area. */
 public final class BoardLayout extends ViewGroup {
-    private static final float CARD_ASPECT = 1.22f;
     private static final int VACANT_SLOT_COUNT = 2;
 
     private long layoutSeed = 1L;
@@ -243,82 +242,17 @@ public final class BoardLayout extends ViewGroup {
     }
 
     private void fitScatter(int count, int contentWidth, int contentHeight) {
-        if (count == 0) {
-            tileWidth = tileHeight = 0;
-            scatter = new ScatterLayoutEngine.Result(new float[0], new float[0], new float[0], contentHeight);
-            return;
-        }
-
-        float usableArea = contentWidth * (float) contentHeight;
-        float targetAreaShare = largerCards ? 0.43f : 0.30f;
-        int maximumCardWidth = dp(largerCards ? 104 : 84);
-        float estimatedWidth = (float) Math.sqrt(
-            usableArea * targetAreaShare / (count * CARD_ASPECT)
-        );
-        int candidateWidth = Math.min(
-            maximumCardWidth,
-            Math.max(dp(18), Math.round(estimatedWidth))
-        );
-        ScatterLayoutEngine.Result candidate = null;
-
-        for (int attempt = 0; attempt < 16 && candidateWidth >= dp(12); attempt++) {
-            int candidateHeight = Math.max(1, Math.round(candidateWidth * CARD_ASPECT));
-            int edgeMargin = largerCards
-                ? Math.max(dp(2), Math.round(candidateWidth * 0.055f))
-                : Math.max(dp(3), Math.round(candidateWidth * 0.10f));
-            int spacing = largerCards
-                ? Math.max(dp(1), Math.round(candidateWidth * 0.075f))
-                : Math.max(dp(2), Math.round(candidateWidth * 0.14f));
-            candidate = ScatterLayoutEngine.generateWithin(
-                count,
-                contentWidth,
-                contentHeight,
-                candidateWidth,
-                candidateHeight,
-                edgeMargin,
-                spacing,
-                layoutSeed
-            );
-            if (candidate != null) {
-                tileWidth = candidateWidth;
-                tileHeight = candidateHeight;
-                scatter = candidate;
-                return;
-            }
-            candidateWidth = Math.max(dp(11), Math.round(candidateWidth * 0.92f));
-        }
-
-        // Guaranteed analytical lattice fallback for unusually constrained windows.
-        int bestColumns = 1;
-        float bestWidth = 1f;
-        double angle = Math.toRadians(ScatterLayoutEngine.MAX_ROTATION_DEGREES);
-        float horizontalFactor = (float) (Math.cos(angle) + CARD_ASPECT * Math.sin(angle));
-        float verticalFactor = (float) (Math.sin(angle) + CARD_ASPECT * Math.cos(angle));
-        for (int columns = 1; columns <= count; columns++) {
-            int rows = (count + columns - 1) / columns;
-            float widthForColumns = contentWidth / (columns * horizontalFactor);
-            float widthForRows = contentHeight / (rows * verticalFactor);
-            float fittedWidth = Math.min(widthForColumns, widthForRows)
-                * (largerCards ? 0.96f : 0.90f);
-            if (fittedWidth > bestWidth) {
-                bestWidth = fittedWidth;
-                bestColumns = columns;
-            }
-        }
-        tileWidth = Math.max(
-            1,
-            Math.min(maximumCardWidth, (int) Math.floor(bestWidth))
-        );
-        tileHeight = Math.max(1, Math.round(tileWidth * CARD_ASPECT));
-        scatter = ScatterLayoutEngine.latticeWithin(
+        BoardCardSizing.Fit fit = BoardCardSizing.fit(
             count,
             contentWidth,
             contentHeight,
-            tileWidth,
-            tileHeight,
-            bestColumns,
+            getResources().getDisplayMetrics().density,
+            largerCards,
             layoutSeed
         );
+        tileWidth = fit.cardWidth;
+        tileHeight = fit.cardHeight;
+        scatter = fit.scatter;
     }
 
     @Override

@@ -1,13 +1,17 @@
 package com.example.flipandfind;
 
+import android.content.Context;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioTrack;
 import android.os.Build;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
 
-/** Small, permission-free sound and haptic effects for game events. */
+/** Small sound and haptic effects for game events. */
 public final class GameFeedback {
     private static final float MATCH_CHIME_VOLUME = 0.72f;
 
@@ -47,18 +51,23 @@ public final class GameFeedback {
     }
 
     public void onCardFlip(View source) {
-        emitHaptic(source, HapticFeedbackConstants.CLOCK_TICK);
+        emitHaptic(source, HapticPulse.CARD_FLIP, HapticFeedbackConstants.CLOCK_TICK);
     }
 
     public void onMatch(View source) {
         if (!released && soundEnabled) {
             playMatchChime();
         }
-        emitHaptic(source, matchHapticConstant());
+        emitHaptic(source, HapticPulse.MATCH, matchHapticConstant());
     }
 
     public void onMiss(View source) {
-        emitHaptic(source, missHapticConstant());
+        emitHaptic(source, HapticPulse.MISS, missHapticConstant());
+    }
+
+    /** Gives immediate confirmation when the user turns haptics on in settings. */
+    public void previewHaptics(View source) {
+        emitHaptic(source, HapticPulse.MATCH, matchHapticConstant());
     }
 
     /** Releases native audio resources. This helper must not be reused afterwards. */
@@ -72,18 +81,68 @@ public final class GameFeedback {
         releaseMatchChime();
     }
 
-    private void emitHaptic(View source, int hapticConstant) {
-        if (released) {
+    private void emitHaptic(View source, HapticPulse pulse, int hapticConstant) {
+        if (released || !hapticsEnabled || source == null) {
             return;
         }
-        if (hapticsEnabled && source != null && source.isAttachedToWindow()) {
-            try {
-                // No ignore-global-setting flag: always respect the device's haptic preference.
-                source.performHapticFeedback(hapticConstant);
-            } catch (RuntimeException ignored) {
-                // A detached or vendor-specific View implementation must not interrupt the game.
-            }
+        Context context = source.getContext();
+        if (vibrate(context, pulse)) {
+            return;
         }
+        if (!source.isAttachedToWindow()) {
+            return;
+        }
+        try {
+            // Ignore only a vendor/view-local flag. The platform still applies its global policy.
+            source.performHapticFeedback(
+                hapticConstant,
+                HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING
+            );
+        } catch (RuntimeException ignored) {
+            // A detached or vendor-specific View implementation must not interrupt the game.
+        }
+    }
+
+    @SuppressWarnings("deprecation") // Required by the supported Android 6-7 fallback.
+    private static boolean vibrate(Context context, HapticPulse pulse) {
+        Vibrator vibrator;
+        try {
+            vibrator = defaultVibrator(context);
+            if (vibrator == null || !vibrator.hasVibrator()) {
+                return false;
+            }
+            AudioAttributes attributes = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_GAME)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build();
+            long[] timings = pulse.copyTimings();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                VibrationEffect effect = VibrationEffect.createWaveform(
+                    timings,
+                    pulse.copyAmplitudes(),
+                    -1
+                );
+                vibrator.vibrate(effect, attributes);
+            } else {
+                // API 23-25 cannot control amplitude, but still preserve the pulse rhythm.
+                vibrator.vibrate(timings, -1, attributes);
+            }
+            return true;
+        } catch (RuntimeException ignored) {
+            // Fall through to View.performHapticFeedback when the vibrator service is absent,
+            // restricted, or implemented differently by the device vendor.
+            return false;
+        }
+    }
+
+    private static Vibrator defaultVibrator(Context context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            VibratorManager manager = (VibratorManager) context.getSystemService(
+                Context.VIBRATOR_MANAGER_SERVICE
+            );
+            return manager == null ? null : manager.getDefaultVibrator();
+        }
+        return (Vibrator) context.getSystemService(Context.VIBRATOR_SERVICE);
     }
 
     private void playMatchChime() {

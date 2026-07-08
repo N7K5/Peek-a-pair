@@ -16,7 +16,9 @@ import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
@@ -42,6 +44,8 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.view.animation.AccelerateInterpolator;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
@@ -62,6 +66,7 @@ import java.util.Date;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TimeZone;
 
 @SuppressLint({"SetTextI18n", "ClickableViewAccessibility"})
 @SuppressWarnings("deprecation")
@@ -76,6 +81,7 @@ public final class MainActivity extends Activity {
     private static final String CARD_BACK_STYLE = "card_back_style";
     private static final String CARD_BACK_MODE = "card_back_mode";
     private static final String TURN_HANDOFF = "turn_handoff";
+    private static final String RANDOM_STARTING_PLAYER = "random_starting_player";
     private static final String SOUND_ENABLED = "sound_enabled";
     private static final String HAPTICS_ENABLED = "haptics_enabled";
     private static final String REDUCED_MOTION = "reduced_motion";
@@ -178,6 +184,34 @@ public final class MainActivity extends Activity {
         BUBBLE
     }
 
+    private static final class ThemePreviewPalette {
+        final int background;
+        final int surface;
+        final int surfaceTint;
+        final int ink;
+        final int primary;
+        final int accent;
+        final boolean dark;
+
+        ThemePreviewPalette(
+            int background,
+            int surface,
+            int surfaceTint,
+            int ink,
+            int primary,
+            int accent,
+            boolean dark
+        ) {
+            this.background = background;
+            this.surface = surface;
+            this.surfaceTint = surfaceTint;
+            this.ink = ink;
+            this.primary = primary;
+            this.accent = accent;
+            this.dark = dark;
+        }
+    }
+
     private enum ThemePreset {
         SYSTEM("Default (follows system)", "DEFAULT", -1),
         MINIMAL_LIGHT("Minimal light", "MIN•L", 0),
@@ -266,6 +300,187 @@ public final class MainActivity extends Activity {
         }
     }
 
+    /** A tiny, allocation-free-at-draw-time preview of a theme's palette and surface language. */
+    private final class ThemePreviewView extends View {
+        private final ThemePreset preset;
+        private final ThemePreviewPalette palette;
+        private final ThemeVisualStyle visualStyle;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF bounds = new RectF();
+
+        ThemePreviewView(ThemePreset preset) {
+            super(MainActivity.this);
+            this.preset = preset;
+            palette = themePreviewPalette(preset);
+            visualStyle = themeVisualStyle(preset);
+            setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float width = getWidth();
+            float height = getHeight();
+            float outerRadius = previewRadius(width, visualStyle);
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(palette.background);
+            bounds.set(0f, 0f, width, height);
+            canvas.drawRoundRect(bounds, outerRadius, outerRadius, paint);
+
+            drawThemeDecoration(canvas, width, height);
+
+            float panelLeft = width * 0.10f;
+            float panelTop = height * 0.13f;
+            float panelRight = width * 0.90f;
+            float panelBottom = height * 0.84f;
+            float panelRadius = previewRadius(width * 0.72f, visualStyle);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(visualStyle == ThemeVisualStyle.GLASS
+                ? withAlpha(palette.surface, palette.dark ? 190 : 175)
+                : palette.surface);
+            bounds.set(panelLeft, panelTop, panelRight, panelBottom);
+            canvas.drawRoundRect(bounds, panelRadius, panelRadius, paint);
+
+            paint.setColor(withAlpha(palette.surfaceTint, palette.dark ? 205 : 220));
+            bounds.set(
+                width * 0.15f,
+                height * 0.19f,
+                width * 0.85f,
+                height * 0.35f
+            );
+            canvas.drawRoundRect(bounds, panelRadius * 0.65f, panelRadius * 0.65f, paint);
+
+            if (visualStyle == ThemeVisualStyle.ARCADE
+                || visualStyle == ThemeVisualStyle.PAPER) {
+                bounds.set(panelLeft, panelTop, panelRight, panelBottom);
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(Math.max(1f, width * 0.022f));
+                paint.setColor(withAlpha(
+                    visualStyle == ThemeVisualStyle.ARCADE
+                        ? palette.primary
+                        : palette.accent,
+                    205
+                ));
+                canvas.drawRoundRect(bounds, panelRadius, panelRadius, paint);
+            }
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(palette.primary);
+            float lineRadius = Math.max(1f, width * 0.025f);
+            bounds.set(
+                width * 0.19f,
+                height * 0.25f,
+                width * 0.61f,
+                height * 0.32f
+            );
+            canvas.drawRoundRect(bounds, lineRadius, lineRadius, paint);
+
+            paint.setColor(withAlpha(palette.ink, 150));
+            bounds.set(
+                width * 0.19f,
+                height * 0.40f,
+                width * 0.76f,
+                height * 0.445f
+            );
+            canvas.drawRoundRect(bounds, lineRadius, lineRadius, paint);
+            bounds.set(
+                width * 0.19f,
+                height * 0.51f,
+                width * 0.56f,
+                height * 0.555f
+            );
+            canvas.drawRoundRect(bounds, lineRadius, lineRadius, paint);
+
+            paint.setColor(visualStyle == ThemeVisualStyle.BUBBLE
+                ? palette.accent
+                : palette.primary);
+            float buttonRadius = visualStyle == ThemeVisualStyle.BUBBLE
+                || visualStyle == ThemeVisualStyle.GLASS
+                ? height * 0.11f
+                : visualStyle == ThemeVisualStyle.FLAT
+                    || visualStyle == ThemeVisualStyle.ARCADE
+                    ? height * 0.025f
+                    : height * 0.065f;
+            bounds.set(
+                width * 0.52f,
+                height * 0.66f,
+                width * 0.80f,
+                height * 0.76f
+            );
+            canvas.drawRoundRect(bounds, buttonRadius, buttonRadius, paint);
+
+            if (preset == ThemePreset.SYSTEM) {
+                float indicatorX = width * 0.78f;
+                float indicatorY = height * 0.24f;
+                float indicatorRadius = width * 0.065f;
+                paint.setColor(palette.accent);
+                canvas.drawCircle(indicatorX, indicatorY, indicatorRadius, paint);
+                if (palette.dark) {
+                    paint.setColor(palette.surface);
+                    canvas.drawCircle(
+                        indicatorX + indicatorRadius * 0.42f,
+                        indicatorY - indicatorRadius * 0.18f,
+                        indicatorRadius * 0.84f,
+                        paint
+                    );
+                }
+            }
+        }
+
+        private void drawThemeDecoration(Canvas canvas, float width, float height) {
+            paint.setStyle(Paint.Style.FILL);
+            if (visualStyle == ThemeVisualStyle.GLASS) {
+                paint.setColor(withAlpha(palette.primary, 95));
+                canvas.drawCircle(width * 0.18f, height * 0.22f, width * 0.17f, paint);
+                paint.setColor(withAlpha(palette.accent, 90));
+                canvas.drawCircle(width * 0.82f, height * 0.77f, width * 0.20f, paint);
+            } else if (visualStyle == ThemeVisualStyle.BUBBLE) {
+                paint.setColor(withAlpha(palette.primary, 105));
+                canvas.drawCircle(width * 0.19f, height * 0.76f, width * 0.15f, paint);
+                paint.setColor(withAlpha(palette.accent, 115));
+                canvas.drawCircle(width * 0.82f, height * 0.23f, width * 0.14f, paint);
+            } else if (visualStyle == ThemeVisualStyle.ARCADE) {
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(Math.max(1f, width * 0.012f));
+                paint.setColor(withAlpha(palette.primary, 75));
+                for (int index = 1; index < 4; index++) {
+                    float x = width * index / 4f;
+                    canvas.drawLine(x, 0f, x, height, paint);
+                }
+                for (int index = 1; index < 3; index++) {
+                    float y = height * index / 3f;
+                    canvas.drawLine(0f, y, width, y, paint);
+                }
+            } else if (visualStyle == ThemeVisualStyle.PAPER) {
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(Math.max(1f, width * 0.009f));
+                paint.setColor(withAlpha(palette.accent, 60));
+                for (int index = 1; index < 5; index++) {
+                    float y = height * index / 5f;
+                    canvas.drawLine(0f, y, width, y, paint);
+                }
+            }
+        }
+
+        private float previewRadius(float width, ThemeVisualStyle style) {
+            switch (style) {
+                case FLAT:
+                    return width * 0.035f;
+                case GLASS:
+                    return width * 0.20f;
+                case ARCADE:
+                    return width * 0.025f;
+                case PAPER:
+                    return width * 0.055f;
+                case BUBBLE:
+                    return width * 0.24f;
+                default:
+                    return width * 0.12f;
+            }
+        }
+    }
+
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private Screen screen = Screen.SETUP;
@@ -278,6 +493,8 @@ public final class MainActivity extends Activity {
     private int missRevealTenths = MissRevealDuration.DEFAULT_TENTHS;
     private boolean useCardColors;
     private TabletopMode tabletopMode = TabletopMode.STATIC_THEME;
+    private TabletopSession tabletopSession;
+    private TabletopMode activeTabletopMode = TabletopMode.STATIC_THEME;
     private CardBackStyle cardBackStyle = CardBackStyle.CLASSIC;
     private CardBackMode cardBackMode = CardBackMode.FIXED;
     private CardBackSession cardBackSession;
@@ -285,6 +502,7 @@ public final class MainActivity extends Activity {
     private ThemePreset themePreset = ThemePreset.SYSTEM;
     private boolean darkTheme = true;
     private boolean turnHandoffEnabled;
+    private boolean randomizeStartingPlayer = true;
     private boolean soundEnabled;
     private boolean hapticsEnabled = true;
     private boolean reducedMotion;
@@ -299,6 +517,7 @@ public final class MainActivity extends Activity {
     private boolean animateBoardEntrance;
     private boolean turnHandoffRequired;
     private boolean immersiveWindowConfigured;
+    private OnBackInvokedCallback backInvokedCallback;
 
     private GameState game;
     private GameStats gameStats;
@@ -322,6 +541,12 @@ public final class MainActivity extends Activity {
     private long pendingPhotoProfileId = -1L;
     private int pendingProfileScrollY = -1;
     private int pendingAdvancedScrollY = -1;
+    private FrameLayout historyScreenHost;
+    private View historyScreenScroll;
+    private View historyScreenBackButton;
+    private View historyDetailOverlay;
+    private View historyDetailFocusReturn;
+    private final List<SwipeRevealLayout> historySwipeRows = new ArrayList<>();
 
     private TextView setupPlayerValue;
     private TextView setupPairValue;
@@ -356,6 +581,10 @@ public final class MainActivity extends Activity {
     private FrameLayout gameHost;
     private LinearLayout gameHeader;
     private LinearLayout gameBoardSection;
+    private GameThemeChromeDrawable gameSurroundChrome;
+    private GameThemeChromeDrawable gameHeaderChrome;
+    private GameThemeChromeDrawable gameBoardFrameChrome;
+    private GameThemeChrome.Treatment activeGameThemeTreatment;
     private TextView leaveGameButton;
     private View turnHandoffOverlay;
     private int renderedHeaderPlayer = -1;
@@ -374,6 +603,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        configureBackNavigation();
         SharedPreferences settings = getSharedPreferences(SETTINGS, MODE_PRIVATE);
         profileStore = new PlayerProfileStore(this);
         historyStore = new GameHistoryStore(this);
@@ -391,6 +621,9 @@ public final class MainActivity extends Activity {
         );
         useCardColors = settings.getBoolean(USE_CARD_COLORS, false);
         tabletopMode = TabletopMode.fromPreference(settings.getString(TABLETOP_MODE, null));
+        tabletopSession = new TabletopSession(
+            System.nanoTime() ^ Long.rotateLeft(SystemClock.elapsedRealtimeNanos(), 11)
+        );
         cardBackStyle = CardBackStyle.fromPreference(
             settings.getString(CARD_BACK_STYLE, null)
         );
@@ -401,6 +634,7 @@ public final class MainActivity extends Activity {
             System.nanoTime() ^ SystemClock.elapsedRealtimeNanos()
         );
         turnHandoffEnabled = settings.getBoolean(TURN_HANDOFF, false);
+        randomizeStartingPlayer = settings.getBoolean(RANDOM_STARTING_PLAYER, true);
         soundEnabled = settings.getBoolean(SOUND_ENABLED, false);
         hapticsEnabled = settings.getBoolean(HAPTICS_ENABLED, true);
         reducedMotion = settings.getBoolean(REDUCED_MOTION, false);
@@ -433,6 +667,17 @@ public final class MainActivity extends Activity {
                 savedInstanceState.getString(
                     "cardBackPreviousRandomStyle",
                     CardBackStyle.CLASSIC.getPreferenceId()
+                )
+            );
+            tabletopSession = TabletopSession.restore(
+                savedInstanceState.getLong(
+                    "tabletopSessionSeed",
+                    tabletopSession.getSessionSeed()
+                ),
+                savedInstanceState.getInt("tabletopRandomGamesStarted", 0),
+                savedInstanceState.getString(
+                    "tabletopPreviousRandomMode",
+                    TabletopMode.STATIC_THEME.getPreferenceId()
                 )
             );
             int savedPlayers = clamp(
@@ -543,6 +788,17 @@ public final class MainActivity extends Activity {
                 cardBackSession.getPreviousRandomGameStylePreferenceId()
             );
         }
+        if (tabletopSession != null) {
+            outState.putLong("tabletopSessionSeed", tabletopSession.getSessionSeed());
+            outState.putInt(
+                "tabletopRandomGamesStarted",
+                tabletopSession.getRandomGamesStarted()
+            );
+            outState.putString(
+                "tabletopPreviousRandomMode",
+                tabletopSession.getPreviousRandomGameModePreferenceId()
+            );
+        }
         outState.putLong("pendingPhotoProfileId", pendingPhotoProfileId);
         outState.putBoolean("turnHandoffRequired", turnHandoffRequired);
 
@@ -577,6 +833,12 @@ public final class MainActivity extends Activity {
                 outState.putLong(
                     "activeCardBackSeed",
                     activeCardBackSelection.getGameSeed()
+                );
+            }
+            if (activeTabletopMode != null && activeTabletopMode.isConcrete()) {
+                outState.putString(
+                    "activeTabletopMode",
+                    activeTabletopMode.getPreferenceId()
                 );
             }
             if (gameStats != null) {
@@ -658,6 +920,15 @@ public final class MainActivity extends Activity {
                     state.getLong("activeCardBackSeed", boardLayoutSeed())
                 )
                 : CardBackSelection.fixed(cardBackStyle, boardLayoutSeed());
+            TabletopMode restoredTabletopMode = TabletopMode.fromPreference(
+                state.getString(
+                    "activeTabletopMode",
+                    TabletopMode.STATIC_THEME.getPreferenceId()
+                )
+            );
+            activeTabletopMode = restoredTabletopMode.isConcrete()
+                ? restoredTabletopMode
+                : TabletopMode.STATIC_THEME;
             computerMemory = ComputerMemory.restore(
                 selectedDifficulty,
                 state.getIntArray("memoryIndices"),
@@ -735,6 +1006,7 @@ public final class MainActivity extends Activity {
             gameSeries = null;
             gameTimer = null;
             activeCardBackSelection = null;
+            activeTabletopMode = TabletopMode.STATIC_THEME;
             resetPairDecisionClock();
             screen = Screen.SETUP;
         }
@@ -823,21 +1095,20 @@ public final class MainActivity extends Activity {
 
         LinearLayout playerHeading = horizontalLayout();
         playerHeading.setGravity(Gravity.CENTER_VERTICAL);
-        setupCard.addView(playerHeading, matchWrap());
+        setupCard.addView(playerHeading, margins(matchWrap(), 0, 5, 0, 0));
         playerHeading.addView(
-            sectionTitle("PLAYERS"),
+            label("Number of players", 19, INK, true),
             weighted(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         );
-        TextView editPlayers = label("EDIT PLAYERS", 11, PRIMARY_DARK, true);
+        TextView editPlayers = label("DETAILS", 11, PRIMARY_DARK, true);
         editPlayers.setGravity(Gravity.CENTER);
         editPlayers.setMinHeight(dp(48));
         editPlayers.setPadding(dp(12), dp(8), dp(12), dp(8));
         editPlayers.setFocusable(true);
         editPlayers.setBackground(ripple(SURFACE_TINT, 14));
-        editPlayers.setContentDescription("Edit player names and photos");
+        editPlayers.setContentDescription("View or edit player details");
         editPlayers.setOnClickListener(view -> showPlayerSettingsScreen());
-        playerHeading.addView(editPlayers, wrapWrap());
-        setupCard.addView(label("How many people are playing?", 19, INK, true), margins(matchWrap(), 0, 5, 0, 0));
+        playerHeading.addView(editPlayers, margins(wrapWrap(), 10, 0, 0, 0));
 
         LinearLayout playerStepper = stepperRow();
         setupCard.addView(playerStepper, margins(matchWrap(), 0, 15, 0, 0));
@@ -872,12 +1143,11 @@ public final class MainActivity extends Activity {
         divider.setBackgroundColor(DIVIDER);
         setupCard.addView(divider, margins(fixed(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)), 0, 21, 0, 21));
 
-        setupCard.addView(sectionTitle("BOARD SIZE"), matchWrap());
         LinearLayout pairHeading = horizontalLayout();
         pairHeading.setGravity(Gravity.CENTER_VERTICAL);
         setupCard.addView(pairHeading, margins(matchWrap(), 0, 5, 0, 0));
         pairHeading.addView(
-            label("How many matching pairs?", 19, INK, true),
+            label("Number of card pairs", 19, INK, true),
             weighted(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         );
         recommendedPairsButton = label("DEFAULT", 10, PRIMARY_DARK, true);
@@ -1162,39 +1432,9 @@ public final class MainActivity extends Activity {
         explanation.setLineSpacing(0f, 1.12f);
         content.addView(explanation, margins(matchWrap(), 0, 18, 0, 0));
 
-        LinearLayout themeCard = advancedSettingsCard();
-        content.addView(themeCard, margins(matchWrap(), 0, 0, 0, 12));
-        themeCard.addView(sectionTitle("THEME"), matchWrap());
-        themeCard.addView(
-            label(themePreset.displayName, 19, INK, true),
-            margins(matchWrap(), 0, 5, 0, 0)
-        );
-        themeCard.addView(
-            label(
-                "Choose colors, button shapes, typography, transparency, and surface style.",
-                13,
-                MUTED,
-                false
-            ),
-            margins(matchWrap(), 0, 4, 0, 0)
-        );
-        TextView chooseTheme = actionButton(
-            "CHOOSE THEME",
-            SURFACE_TINT,
-            darkTheme ? INK : PRIMARY_DARK
-        );
-        chooseTheme.setOnClickListener(view -> {
-            pendingAdvancedScrollY = scroll.getScrollY();
-            showThemePicker();
-        });
-        themeCard.addView(
-            chooseTheme,
-            margins(fixed(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)), 0, 13, 0, 0)
-        );
-
         LinearLayout gameplayCard = advancedSettingsCard();
         content.addView(gameplayCard, margins(matchWrap(), 0, 0, 0, 12));
-        gameplayCard.addView(sectionTitle("GAMEPLAY FEEDBACK"), matchWrap());
+        gameplayCard.addView(sectionTitle("GAMEPLAY"), matchWrap());
         gameplayCard.addView(
             advancedToggle(
                 "Private turn handoff",
@@ -1207,6 +1447,23 @@ public final class MainActivity extends Activity {
                         turnHandoffEnabled,
                         toggle,
                         "Private turn handoff"
+                    );
+                }
+            ),
+            margins(matchWrap(), 0, 8, 0, 0)
+        );
+        gameplayCard.addView(
+            advancedToggle(
+                "Random starting player",
+                "Choose the first participant at random for every new round, including Bot in Solo.",
+                randomizeStartingPlayer,
+                toggle -> {
+                    randomizeStartingPlayer = !randomizeStartingPlayer;
+                    saveAdvancedToggle(
+                        RANDOM_STARTING_PLAYER,
+                        randomizeStartingPlayer,
+                        toggle,
+                        "Random starting player"
                     );
                 }
             ),
@@ -1322,12 +1579,15 @@ public final class MainActivity extends Activity {
         gameplayCard.addView(
             advancedToggle(
                 "Haptics",
-                "Use light touch feedback for cards and turn results.",
+                "Use short game vibrations for card flips, matches, and misses.",
                 hapticsEnabled,
                 toggle -> {
                     hapticsEnabled = !hapticsEnabled;
                     gameFeedback.setHapticsEnabled(hapticsEnabled);
                     saveAdvancedToggle(HAPTICS_ENABLED, hapticsEnabled, toggle, "Haptics");
+                    if (hapticsEnabled) {
+                        gameFeedback.previewHaptics(toggle);
+                    }
                 }
             ),
             margins(matchWrap(), 0, 8, 0, 0)
@@ -1355,16 +1615,21 @@ public final class MainActivity extends Activity {
         accessibilityCard.addView(sectionTitle("ACCESSIBILITY"), matchWrap());
         accessibilityCard.addView(
             advancedToggle(
-                "High-contrast cards",
-                "Strengthen card borders, faces, and symbol contrast.",
+                "High contrast",
+                "Strengthen text, surfaces, controls, borders, and cards throughout the app.",
                 highContrast,
                 toggle -> {
                     highContrast = !highContrast;
-                    saveAdvancedToggle(
-                        HIGH_CONTRAST,
-                        highContrast,
-                        toggle,
-                        "High-contrast cards"
+                    getSharedPreferences(SETTINGS, MODE_PRIVATE)
+                        .edit()
+                        .putBoolean(HIGH_CONTRAST, highContrast)
+                        .apply();
+                    pendingAdvancedScrollY = scroll.getScrollY();
+                    String announcement = "High contrast " + (highContrast ? "on" : "off");
+                    applyThemePalette();
+                    showAdvancedSettingsScreen();
+                    getWindow().getDecorView().post(
+                        () -> getWindow().getDecorView().announceForAccessibility(announcement)
                     );
                 }
             ),
@@ -1397,7 +1662,7 @@ public final class MainActivity extends Activity {
         accessibilityCard.addView(
             advancedToggle(
                 "Larger cards",
-                "Pack the board more tightly so cards can use more of the available area.",
+                "Make cards at least a third wider on typical boards while keeping every card on screen.",
                 largerCards,
                 toggle -> {
                     largerCards = !largerCards;
@@ -1425,52 +1690,39 @@ public final class MainActivity extends Activity {
         );
         EnumMap<TabletopMode, TabletopOptionBinding> tabletopBindings =
             new EnumMap<>(TabletopMode.class);
+        FlowLayout tabletopFlow = new FlowLayout(this);
+        tabletopFlow.setSpacing(dp(8), dp(8));
+        tabletopCard.addView(tabletopFlow, margins(matchWrap(), 0, 10, 0, 0));
         for (TabletopMode mode : TabletopMode.values()) {
             boolean selected = mode == tabletopMode;
-            LinearLayout choice = horizontalLayout();
-            choice.setGravity(Gravity.CENTER_VERTICAL);
-            choice.setMinimumHeight(dp(76));
-            choice.setPadding(dp(11), dp(10), dp(13), dp(10));
+            LinearLayout choice = verticalLayout();
+            choice.setGravity(Gravity.CENTER_HORIZONTAL);
+            choice.setPadding(dp(7), dp(8), dp(7), dp(7));
             choice.setFocusable(true);
             choice.setClickable(true);
+            choice.setMinimumHeight(dp(105));
             choice.setSelected(selected);
 
-            View preview = new View(this);
-            preview.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-            preview.setBackground(tabletopBackground(
-                mode,
-                PRIMARY,
-                themedRadius(10),
-                0x51A7E000 ^ mode.ordinal()
-            ));
-            choice.addView(preview, fixed(dp(58), dp(46)));
+            View preview = tabletopModePreview(mode);
+            choice.addView(preview, centered(dp(78), dp(48)));
 
-            LinearLayout tabletopCopy = verticalLayout();
-            tabletopCopy.setImportantForAccessibility(
-                View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-            );
-            choice.addView(
-                tabletopCopy,
-                margins(weighted(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f), 12, 0, 0, 0)
-            );
             TextView choiceName = label(
                 (selected ? "✓ " : "") + mode.getDisplayName(),
-                15,
+                10,
                 selected ? PRIMARY_DARK : INK,
                 true
             );
-            tabletopCopy.addView(choiceName, matchWrap());
-            TextView choiceDescription = label(mode.getDescription(), 12, MUTED, false);
-            choiceDescription.setLineSpacing(0f, 1.06f);
-            tabletopCopy.addView(
-                choiceDescription,
-                margins(matchWrap(), 0, 4, 0, 0)
+            choiceName.setGravity(Gravity.CENTER);
+            choiceName.setMaxLines(3);
+            choiceName.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO
             );
+            choice.addView(choiceName, margins(matchWrap(), 0, 7, 0, 0));
             choice.setBackground(outlined(
                 selected ? SURFACE_TINT : SURFACE,
                 selected ? PRIMARY : DIVIDER,
                 selected ? 2 : 1,
-                15
+                16
             ));
             choice.setContentDescription(
                 mode.getDisplayName() + ". " + mode.getDescription()
@@ -1491,9 +1743,12 @@ public final class MainActivity extends Activity {
                     mode.getDisplayName() + " tabletop selected"
                 );
             });
-            tabletopCard.addView(
+            tabletopFlow.addView(
                 choice,
-                margins(matchWrap(), 0, 9, 0, 0)
+                new ViewGroup.MarginLayoutParams(
+                    dp(98),
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
             );
         }
 
@@ -1532,11 +1787,13 @@ public final class MainActivity extends Activity {
             option.setPadding(dp(7), dp(8), dp(7), dp(7));
             option.setFocusable(true);
             option.setClickable(true);
+            option.setMinimumHeight(dp(128));
 
             CardTileView preview = new CardTileView(this);
             preview.setCornerRadiusFraction(cardCornerRadiusFraction());
             preview.setCardNumber(style.ordinal() + 1);
             preview.setReducedMotion(reducedMotion);
+            preview.setHighContrast(highContrast);
             preview.setCardBackStyle(style);
             preview.setClickable(false);
             preview.setFocusable(false);
@@ -1553,7 +1810,7 @@ public final class MainActivity extends Activity {
                 true
             );
             optionName.setGravity(Gravity.CENTER);
-            optionName.setMaxLines(2);
+            optionName.setMaxLines(3);
             option.addView(optionName, margins(matchWrap(), 0, 7, 0, 0));
             cardBackBindings.put(
                 style,
@@ -1579,26 +1836,28 @@ public final class MainActivity extends Activity {
 
             ViewGroup.MarginLayoutParams optionParams = new ViewGroup.MarginLayoutParams(
                 dp(98),
-                dp(128)
+                ViewGroup.LayoutParams.WRAP_CONTENT
             );
             cardBackFlow.addView(option, optionParams);
         }
         renderCardBackSelection(cardBackBindings, cardBackModeBindings);
+        addThemeSettingsCard(content, scroll);
 
         TextView back = label("‹", 32, INK, false);
         back.setGravity(Gravity.CENTER);
         back.setFocusable(true);
         back.setContentDescription("Back to game setup");
-        back.setBackground(ripple(SURFACE_TINT, 14));
+        back.setBackground(borderedRipple(SURFACE, PRIMARY, 1, 14));
         back.setElevation(dp(themedElevation(4)));
         back.setOnClickListener(view -> showSetupScreen());
+        back.setVisibility(View.INVISIBLE);
         FrameLayout.LayoutParams backParams = new FrameLayout.LayoutParams(
             dp(48),
             dp(48),
             Gravity.TOP | Gravity.START
         );
-        backParams.setMargins(dp(22), dp(22), 0, 0);
         advancedHost.addView(back, backParams);
+        configureStickyBack(advancedHost, scroll, backPlaceholder, back);
 
         setContentView(advancedHost);
         enterImmersiveMode();
@@ -1608,6 +1867,89 @@ public final class MainActivity extends Activity {
             restoreScrollBeforeFirstDraw(scroll, scrollTarget);
         }
         scroll.post(CardBackAnimationTicker::wake);
+    }
+
+    private void addThemeSettingsCard(LinearLayout content, ScrollView scroll) {
+        LinearLayout themeCard = advancedSettingsCard();
+        content.addView(themeCard, margins(matchWrap(), 0, 0, 0, 12));
+        themeCard.addView(sectionTitle("THEME"), matchWrap());
+        themeCard.addView(
+            label("Choose a look", 19, INK, true),
+            margins(matchWrap(), 0, 5, 0, 0)
+        );
+        themeCard.addView(
+            label(
+                "Choose colors, button shapes, typography, transparency, and surface style.",
+                13,
+                MUTED,
+                false
+            ),
+            margins(matchWrap(), 0, 4, 0, 0)
+        );
+        FlowLayout themeFlow = new FlowLayout(this);
+        themeFlow.setSpacing(dp(8), dp(8));
+        themeCard.addView(themeFlow, margins(matchWrap(), 0, 10, 0, 0));
+        for (ThemePreset preset : ThemePreset.selectable()) {
+            boolean selected = preset == themePreset;
+            LinearLayout option = verticalLayout();
+            option.setGravity(Gravity.CENTER_HORIZONTAL);
+            option.setPadding(dp(6), dp(7), dp(6), dp(6));
+            option.setFocusable(true);
+            option.setClickable(true);
+            option.setMinimumHeight(dp(91));
+            option.setSelected(selected);
+            option.setBackground(outlined(
+                selected ? SURFACE_TINT : SURFACE,
+                selected ? PRIMARY : DIVIDER,
+                selected ? 2 : 1,
+                15
+            ));
+
+            ThemePreviewView preview = new ThemePreviewView(preset);
+            preview.setClickable(false);
+            preview.setFocusable(false);
+            preview.setEnabled(false);
+            option.addView(preview, centered(dp(68), dp(50)));
+
+            TextView optionName = label(
+                (selected ? "✓ " : "") + preset.buttonLabel,
+                9,
+                selected ? PRIMARY_DARK : INK,
+                true
+            );
+            optionName.setGravity(Gravity.CENTER);
+            optionName.setMaxLines(3);
+            optionName.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            );
+            option.addView(optionName, margins(matchWrap(), 0, 6, 0, 0));
+            option.setContentDescription(
+                preset.displayName + ", " + (selected ? "selected" : "not selected")
+            );
+            option.setOnClickListener(view -> {
+                if (screen != Screen.ADVANCED || themePreset == preset) {
+                    return;
+                }
+                pendingAdvancedScrollY = scroll.getScrollY();
+                themePreset = preset;
+                darkTheme = resolveDarkTheme(themePreset);
+                getSharedPreferences(SETTINGS, MODE_PRIVATE)
+                    .edit()
+                    .putString(THEME_PRESET, themePreset.name())
+                    .putBoolean(DARK_THEME, darkTheme)
+                    .apply();
+                applyThemePalette();
+                showAdvancedSettingsScreen();
+            });
+
+            themeFlow.addView(
+                option,
+                new ViewGroup.MarginLayoutParams(
+                    dp(88),
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            );
+        }
     }
 
     private void renderTabletopSelection(
@@ -1624,7 +1966,7 @@ public final class MainActivity extends Activity {
                 selected ? SURFACE_TINT : SURFACE,
                 selected ? PRIMARY : DIVIDER,
                 selected ? 2 : 1,
-                15
+                16
             ));
             binding.option.setContentDescription(
                 mode.getDisplayName() + ". " + mode.getDescription()
@@ -1636,6 +1978,8 @@ public final class MainActivity extends Activity {
     }
 
     private void showHistoryScreen() {
+        dismissHistoryEntryDetails(false);
+        historySwipeRows.clear();
         cancelPendingActions();
         screen = Screen.HISTORY;
         setWindowBackground(BACKGROUND);
@@ -1651,10 +1995,12 @@ public final class MainActivity extends Activity {
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         FrameLayout historyHost = new FrameLayout(this);
+        historyScreenHost = historyHost;
         applyScreenBackground(historyHost);
         applySafeCutoutInsets(historyHost);
 
         ScrollView scroll = new ScrollView(this);
+        historyScreenScroll = scroll;
         scroll.setFillViewport(true);
         applyScreenBackground(scroll);
         historyHost.addView(
@@ -1761,22 +2107,46 @@ public final class MainActivity extends Activity {
                 margins(fixed(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)), 0, 12, 0, 0)
             );
 
-            content.addView(
-                sectionTitle("RECENT GAMES"),
-                margins(matchWrap(), 0, 22, 0, 0)
-            );
             List<GameHistoryEntry> entries = history.getEntries();
-            int shown = entries.size();
-            DateFormat dateFormat = DateFormat.getDateTimeInstance(
-                DateFormat.MEDIUM,
-                DateFormat.SHORT
-            );
-            for (int index = 0; index < shown; index++) {
-                GameHistoryEntry entry = entries.get(index);
+            if (entries.isEmpty()) {
                 content.addView(
-                    historyEntryCard(entry, dateFormat),
-                    margins(matchWrap(), 0, index == 0 ? 8 : 10, 0, 0)
+                    label(
+                        "No recent game details are retained. Reset history to clear the remaining lifetime totals.",
+                        13,
+                        MUTED,
+                        false
+                    ),
+                    margins(matchWrap(), 0, 18, 0, 0)
                 );
+            } else {
+                List<GameHistoryGrouping.Section> sections = GameHistoryGrouping.group(
+                    entries,
+                    System.currentTimeMillis(),
+                    TimeZone.getDefault()
+                );
+                DateFormat dateFormat = DateFormat.getDateTimeInstance(
+                    DateFormat.MEDIUM,
+                    DateFormat.SHORT
+                );
+                for (int sectionIndex = 0; sectionIndex < sections.size(); sectionIndex++) {
+                    GameHistoryGrouping.Section section = sections.get(sectionIndex);
+                    content.addView(
+                        sectionTitle(section.getPeriod().getDisplayName()),
+                        margins(matchWrap(), 0, sectionIndex == 0 ? 22 : 24, 0, 0)
+                    );
+                    List<GameHistoryGrouping.GroupedEntry> groupedEntries = section.getEntries();
+                    for (int entryIndex = 0; entryIndex < groupedEntries.size(); entryIndex++) {
+                        GameHistoryGrouping.GroupedEntry groupedEntry = groupedEntries.get(entryIndex);
+                        content.addView(
+                            historyEntryCard(
+                                groupedEntry.getEntry(),
+                                groupedEntry.getRetainedIndex(),
+                                dateFormat
+                            ),
+                            margins(matchWrap(), 0, entryIndex == 0 ? 8 : 10, 0, 0)
+                        );
+                    }
+                }
             }
         }
 
@@ -1784,26 +2154,34 @@ public final class MainActivity extends Activity {
         back.setGravity(Gravity.CENTER);
         back.setFocusable(true);
         back.setContentDescription("Back to game setup");
-        back.setBackground(ripple(SURFACE_TINT, 14));
+        back.setBackground(borderedRipple(SURFACE, PRIMARY, 1, 14));
         back.setElevation(dp(themedElevation(4)));
-        back.setOnClickListener(view -> showSetupScreen());
+        back.setOnClickListener(view -> leaveHistoryScreen());
+        historyScreenBackButton = back;
+        back.setVisibility(View.INVISIBLE);
         FrameLayout.LayoutParams backParams = new FrameLayout.LayoutParams(
             dp(48),
             dp(48),
             Gravity.TOP | Gravity.START
         );
-        backParams.setMargins(dp(22), dp(22), 0, 0);
         historyHost.addView(back, backParams);
+        configureStickyBack(historyHost, scroll, backPlaceholder, back);
 
         setContentView(historyHost);
         enterImmersiveMode();
     }
 
-    private View historyEntryCard(GameHistoryEntry entry, DateFormat dateFormat) {
+    private View historyEntryCard(
+        GameHistoryEntry entry,
+        int retainedIndex,
+        DateFormat dateFormat
+    ) {
         LinearLayout card = verticalLayout();
         card.setPadding(dp(16), dp(14), dp(16), dp(14));
         card.setBackground(rounded(SURFACE, 18));
         card.setElevation(dp(themedElevation(1)));
+        card.setClickable(true);
+        card.setFocusable(true);
 
         TextView date = label(
             dateFormat.format(new Date(entry.getCompletedAtEpochMillis())),
@@ -1824,10 +2202,14 @@ public final class MainActivity extends Activity {
             margins(matchWrap(), 0, 6, 0, 0)
         );
 
-        String players = entry.getPlayerCount() == 1
-            && entry.getParticipantCount() == 2
-            ? "Solo vs Bot"
-            : entry.getPlayerCount() + " players";
+        String players;
+        if (entry.getPlayerCount() == 1 && entry.getParticipantCount() == 2) {
+            players = "Solo vs Bot";
+        } else if (entry.getPlayerCount() == 1) {
+            players = "Solo";
+        } else {
+            players = entry.getPlayerCount() + " players";
+        }
         card.addView(
             label(
                 players + "  •  " + entry.getPairCount() + " pairs  •  "
@@ -1841,7 +2223,285 @@ public final class MainActivity extends Activity {
         TextView scores = label(entry.getCompactScoreSummary(), 13, INK, true);
         scores.setLineSpacing(0f, 1.08f);
         card.addView(scores, margins(matchWrap(), 0, 6, 0, 0));
-        return card;
+
+        String result = entry.isTie()
+            ? "Tie between " + winnerNames
+            : winnerNames + " won";
+        card.setContentDescription(
+            result + ". " + date.getText() + ". " + entry.getCompactScoreSummary()
+                + ". Tap for full details. Swipe left to reveal delete."
+        );
+
+        ImageView delete = new ImageView(this);
+        delete.setImageResource(android.R.drawable.ic_menu_delete);
+        delete.setColorFilter(Color.WHITE);
+        delete.setPadding(dp(22), dp(18), dp(22), dp(18));
+        delete.setBackground(ripple(Color.rgb(205, 52, 72), 18));
+        delete.setContentDescription(
+            "Delete game from " + dateFormat.format(new Date(entry.getCompletedAtEpochMillis()))
+        );
+        delete.setFocusable(true);
+
+        SwipeRevealLayout swipe = new SwipeRevealLayout(this);
+        swipe.setActionView(delete, dp(72));
+        swipe.setContentView(card);
+        swipe.setOnContentClickListener(view -> showHistoryEntryDetails(entry, view));
+        historySwipeRows.add(swipe);
+        delete.setOnClickListener(view -> {
+            if (historyStore.deleteRetainedGame(retainedIndex)) {
+                Toast.makeText(this, "Game deleted", Toast.LENGTH_SHORT).show();
+                showHistoryScreen();
+            }
+        });
+        return swipe;
+    }
+
+    private void showHistoryEntryDetails(GameHistoryEntry entry, View focusReturn) {
+        if (screen != Screen.HISTORY
+            || historyScreenHost == null
+            || !historyScreenHost.isAttachedToWindow()) {
+            return;
+        }
+        dismissHistoryEntryDetails(false);
+        for (SwipeRevealLayout row : historySwipeRows) {
+            row.close(false);
+        }
+        historyDetailFocusReturn = focusReturn;
+
+        FrameLayout overlay = new FrameLayout(this);
+        overlay.setClickable(true);
+        overlay.setFocusable(true);
+        overlay.setFocusableInTouchMode(true);
+        overlay.setBackgroundColor(Color.argb(darkTheme ? 196 : 156, 0, 0, 0));
+        overlay.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+        overlay.setOnClickListener(view -> dismissHistoryEntryDetails(true));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            overlay.setAccessibilityPaneTitle("Game details");
+        }
+
+        LinearLayout detailCard = verticalLayout();
+        detailCard.setClickable(true);
+        detailCard.setFocusable(true);
+        detailCard.setBackground(outlined(
+            SURFACE,
+            highContrast ? PRIMARY : DIVIDER,
+            highContrast ? 2 : 1,
+            24
+        ));
+        detailCard.setElevation(dp(themedElevation(12)));
+        detailCard.setOnClickListener(view -> {
+            // Consume taps so only the dim backdrop dismisses the modal card.
+        });
+
+        LinearLayout detailHeader = horizontalLayout();
+        detailHeader.setGravity(Gravity.CENTER_VERTICAL);
+        detailHeader.setPadding(dp(20), dp(16), dp(12), dp(14));
+        detailCard.addView(detailHeader, matchWrap());
+        TextView detailTitle = label("Game details", 22, INK, true);
+        detailTitle.setFocusable(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            detailTitle.setAccessibilityHeading(true);
+        }
+        detailHeader.addView(
+            detailTitle,
+            weighted(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        );
+        TextView close = label("×", 27, INK, false);
+        close.setGravity(Gravity.CENTER);
+        close.setFocusable(true);
+        close.setContentDescription("Close game details");
+        close.setBackground(borderedRipple(SURFACE_TINT, PRIMARY, 1, 13));
+        close.setOnClickListener(view -> dismissHistoryEntryDetails(true));
+        detailHeader.addView(close, fixed(dp(48), dp(48)));
+
+        View headerDivider = new View(this);
+        headerDivider.setBackgroundColor(DIVIDER);
+        detailCard.addView(
+            headerDivider,
+            fixed(ViewGroup.LayoutParams.MATCH_PARENT, dp(highContrast ? 2 : 1))
+        );
+
+        LinearLayout details = verticalLayout();
+        details.setPadding(dp(20), dp(18), dp(20), dp(22));
+
+        String winnerNames = TextUtils.join(" & ", entry.getWinnerNames());
+        TextView result = label(
+            entry.isTie() ? "Tie: " + winnerNames : winnerNames + " won",
+            22,
+            entry.isTie() ? ACCENT : SUCCESS,
+            true
+        );
+        details.addView(result, matchWrap());
+
+        Date completed = new Date(entry.getCompletedAtEpochMillis());
+        details.addView(
+            label(
+                DateFormat.getDateInstance(DateFormat.FULL).format(completed)
+                    + "  •  " + DateFormat.getTimeInstance(DateFormat.SHORT).format(completed),
+                13,
+                MUTED,
+                false
+            ),
+            margins(matchWrap(), 0, 6, 0, 0)
+        );
+
+        LinearLayout overview = verticalLayout();
+        overview.setPadding(dp(15), dp(13), dp(15), dp(13));
+        overview.setBackground(rounded(SURFACE_TINT, 16));
+        details.addView(overview, margins(matchWrap(), 0, 16, 0, 0));
+        String mode;
+        if (entry.getPlayerCount() == 1 && entry.getParticipantCount() == 2) {
+            mode = "Solo vs Bot";
+        } else if (entry.getPlayerCount() == 1) {
+            mode = "Solo";
+        } else {
+            mode = "Local multiplayer  •  " + entry.getPlayerCount() + " players";
+        }
+        overview.addView(label(mode, 15, INK, true), matchWrap());
+        overview.addView(
+            label(
+                entry.getPairCount() + (entry.getPairCount() == 1 ? " pair" : " pairs")
+                    + "  •  " + formatDuration(entry.getActiveDurationMillis()),
+                13,
+                MUTED,
+                false
+            ),
+            margins(matchWrap(), 0, 5, 0, 0)
+        );
+
+        details.addView(sectionTitle("EVERY SCORE"), margins(matchWrap(), 0, 17, 0, 0));
+        int[] winnerIndices = entry.copyWinnerIndices();
+        for (int participant = 0; participant < entry.getParticipantCount(); participant++) {
+            boolean winner = false;
+            for (int winnerIndex : winnerIndices) {
+                if (winnerIndex == participant) {
+                    winner = true;
+                    break;
+                }
+            }
+            LinearLayout participantRow = verticalLayout();
+            participantRow.setPadding(dp(14), dp(12), dp(14), dp(12));
+            participantRow.setBackground(outlined(SURFACE, winner ? SUCCESS : DIVIDER, 1, 14));
+            details.addView(
+                participantRow,
+                margins(matchWrap(), 0, participant == 0 ? 8 : 9, 0, 0)
+            );
+            participantRow.addView(
+                label(
+                    entry.getParticipantName(participant) + "  •  "
+                        + entry.getScore(participant)
+                        + (entry.getScore(participant) == 1 ? " pair" : " pairs")
+                        + (winner ? "  •  WINNER" : ""),
+                    16,
+                    winner ? SUCCESS : INK,
+                    true
+                ),
+                matchWrap()
+            );
+            ArrayList<String> optionalStats = new ArrayList<>();
+            if (entry.hasAccuracyStats()) {
+                optionalStats.add("Accuracy " + entry.getAccuracyPercent(participant) + "%");
+            }
+            if (entry.hasLongestStreakStats()) {
+                optionalStats.add("Longest streak " + entry.getLongestStreak(participant));
+            }
+            if (!optionalStats.isEmpty()) {
+                participantRow.addView(
+                    label(TextUtils.join("  •  ", optionalStats), 12, MUTED, false),
+                    margins(matchWrap(), 0, 5, 0, 0)
+                );
+            }
+        }
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+        scroll.addView(details, matchWrap());
+        detailCard.addView(
+            scroll,
+            weighted(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        );
+
+        FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            Gravity.CENTER
+        );
+        cardParams.setMargins(dp(20), dp(42), dp(20), dp(42));
+        overlay.addView(detailCard, cardParams);
+        historyDetailOverlay = overlay;
+
+        if (historyScreenScroll != null) {
+            historyScreenScroll.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            );
+        }
+        if (historyScreenBackButton != null) {
+            historyScreenBackButton.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            );
+        }
+        historyScreenHost.addView(
+            overlay,
+            new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        );
+        overlay.bringToFront();
+        detailTitle.post(() -> {
+            if (historyDetailOverlay == overlay && screen == Screen.HISTORY) {
+                detailTitle.requestFocus();
+                detailTitle.sendAccessibilityEvent(
+                    android.view.accessibility.AccessibilityEvent.TYPE_VIEW_FOCUSED
+                );
+            }
+        });
+    }
+
+    /** Returns true when an open in-activity history modal was closed. */
+    private boolean dismissHistoryEntryDetails(boolean restoreFocus) {
+        View overlay = historyDetailOverlay;
+        if (overlay == null) {
+            return false;
+        }
+        historyDetailOverlay = null;
+        if (overlay.getParent() instanceof ViewGroup) {
+            ((ViewGroup) overlay.getParent()).removeView(overlay);
+        }
+        if (historyScreenScroll != null) {
+            historyScreenScroll.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+            );
+        }
+        if (historyScreenBackButton != null) {
+            historyScreenBackButton.setImportantForAccessibility(
+                View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+            );
+        }
+        View focusReturn = historyDetailFocusReturn;
+        historyDetailFocusReturn = null;
+        if (restoreFocus && focusReturn != null && focusReturn.isAttachedToWindow()) {
+            focusReturn.post(() -> {
+                if (screen == Screen.HISTORY && historyDetailOverlay == null) {
+                    focusReturn.requestFocus();
+                    focusReturn.sendAccessibilityEvent(
+                        android.view.accessibility.AccessibilityEvent.TYPE_VIEW_FOCUSED
+                    );
+                }
+            });
+        }
+        return true;
+    }
+
+    private void leaveHistoryScreen() {
+        dismissHistoryEntryDetails(false);
+        historySwipeRows.clear();
+        historyScreenHost = null;
+        historyScreenScroll = null;
+        historyScreenBackButton = null;
+        historyDetailFocusReturn = null;
+        showSetupScreen();
     }
 
     private String retainedHistoryLeader(Map<String, Integer> winnerCounts) {
@@ -1896,11 +2556,12 @@ public final class MainActivity extends Activity {
             option.setPadding(dp(7), dp(8), dp(7), dp(7));
             option.setFocusable(true);
             option.setClickable(true);
+            option.setMinimumHeight(dp(128));
             option.addView(cardBackModePreview(mode), centered(dp(54), dp(66)));
 
             TextView optionName = label(mode.getDisplayName(), 10, INK, true);
             optionName.setGravity(Gravity.CENTER);
-            optionName.setMaxLines(2);
+            optionName.setMaxLines(3);
             option.addView(optionName, margins(matchWrap(), 0, 7, 0, 0));
             modeBindings.put(mode, new CardBackOptionBinding(option, optionName));
             option.setOnClickListener(view -> {
@@ -1919,7 +2580,10 @@ public final class MainActivity extends Activity {
             });
             cardBackFlow.addView(
                 option,
-                new ViewGroup.MarginLayoutParams(dp(98), dp(128))
+                new ViewGroup.MarginLayoutParams(
+                    dp(98),
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
             );
         }
     }
@@ -1941,6 +2605,7 @@ public final class MainActivity extends Activity {
             preview.setCornerRadiusFraction(cardCornerRadiusFraction());
             preview.setCardNumber(40 + index);
             preview.setReducedMotion(reducedMotion);
+            preview.setHighContrast(highContrast);
             preview.setCardBackStyle(previewStyles[index]);
             preview.setClickable(false);
             preview.setFocusable(false);
@@ -2924,7 +3589,7 @@ public final class MainActivity extends Activity {
 
     private void setControlEnabled(TextView control, boolean enabled) {
         control.setEnabled(enabled);
-        control.setAlpha(enabled ? 1f : 0.32f);
+        control.setAlpha(enabled ? 1f : highContrast ? 0.58f : 0.32f);
     }
 
     private void startNewGame() {
@@ -2936,7 +3601,14 @@ public final class MainActivity extends Activity {
     }
 
     private void startGameRound(boolean keepSeries) {
-        game = new GameState(selectedHumanPlayers, selectedPairs);
+        long roundSeed = System.nanoTime()
+            ^ Long.rotateLeft(SystemClock.elapsedRealtimeNanos(), 23);
+        int startingPlayer = StartingPlayerSelector.select(
+            selectedHumanPlayers,
+            randomizeStartingPlayer,
+            roundSeed
+        );
+        game = new GameState(selectedHumanPlayers, selectedPairs, startingPlayer);
         if (cardBackSession == null) {
             cardBackSession = new CardBackSession(
                 System.nanoTime() ^ SystemClock.elapsedRealtimeNanos()
@@ -2949,6 +3621,17 @@ public final class MainActivity extends Activity {
             cardBackMode,
             cardBackStyle,
             cardBackGameSeed
+        );
+        if (tabletopSession == null) {
+            tabletopSession = new TabletopSession(
+                System.nanoTime() ^ Long.rotateLeft(SystemClock.elapsedRealtimeNanos(), 11)
+            );
+        }
+        long tabletopGameSeed = Long.rotateLeft(cardBackGameSeed, 29)
+            ^ 0x6A09E667F3BCC909L;
+        activeTabletopMode = tabletopSession.beginGame(
+            tabletopMode,
+            tabletopGameSeed
         );
         String[] participantNames = currentParticipantNames();
         if (!keepSeries
@@ -2976,8 +3659,15 @@ public final class MainActivity extends Activity {
                 boardLayoutSeed()
             );
         }
+        if (activeTabletopMode == null || !activeTabletopMode.isConcrete()) {
+            activeTabletopMode = tabletopMode != null && tabletopMode.isConcrete()
+                ? tabletopMode
+                : TabletopMode.STATIC_THEME;
+        }
         screen = Screen.GAME;
-        setWindowBackground(playerColor(game.getCurrentPlayer()));
+        int initialPlayerColor = playerColor(game.getCurrentPlayer());
+        activeGameThemeTreatment = gameThemeTreatment(initialPlayerColor);
+        setWindowBackground(activeGameThemeTreatment.getSurroundEnd());
         turnHandoffOverlay = null;
         renderedHeaderPlayer = -1;
         renderedScorePlayer = -1;
@@ -2989,10 +3679,14 @@ public final class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         gameHost = new FrameLayout(this);
-        gameHost.setBackground(gameSurroundBackground(playerColor(game.getCurrentPlayer())));
+        gameSurroundChrome = gameThemeChromeDrawable(
+            GameThemeChromeDrawable.Region.SURROUND,
+            activeGameThemeTreatment
+        );
+        gameHost.setBackground(gameSurroundChrome);
 
         gameRoot = verticalLayout();
-        gameRoot.setBackground(gameSurroundBackground(playerColor(game.getCurrentPlayer())));
+        gameRoot.setBackgroundColor(Color.TRANSPARENT);
         applySafeCutoutInsets(gameRoot);
         gameHost.addView(
             gameRoot,
@@ -3004,6 +3698,12 @@ public final class MainActivity extends Activity {
 
         gameHeader = verticalLayout();
         gameHeader.setPadding(dp(12), dp(8), dp(12), dp(8));
+        gameHeaderChrome = gameThemeChromeDrawable(
+            GameThemeChromeDrawable.Region.HEADER,
+            activeGameThemeTreatment
+        );
+        gameHeader.setBackground(gameHeaderChrome);
+        gameHeader.setElevation(dp(themedElevation(3)));
         gameRoot.addView(gameHeader, matchWrap());
 
         LinearLayout turnRow = horizontalLayout();
@@ -3047,9 +3747,11 @@ public final class MainActivity extends Activity {
 
         gameBoardSection = verticalLayout();
         gameBoardSection.setPadding(dp(8), dp(6), dp(8), dp(8));
-        gameBoardSection.setBackground(
-            gameSurroundBackground(playerColor(game.getCurrentPlayer()))
+        gameBoardFrameChrome = gameThemeChromeDrawable(
+            GameThemeChromeDrawable.Region.BOARD_FRAME,
+            activeGameThemeTreatment
         );
+        gameBoardSection.setBackground(gameBoardFrameChrome);
         gameRoot.addView(
             gameBoardSection,
             weighted(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
@@ -3076,9 +3778,9 @@ public final class MainActivity extends Activity {
         boardLayout.setLayoutSeed(boardLayoutSeed());
         boardLayout.setLargerCards(largerCards);
         boardLayout.setPadding(dp(7), dp(7), dp(7), dp(7));
-        int activePlayerColor = playerColor(game.getCurrentPlayer());
+        int activePlayerColor = initialPlayerColor;
         tabletopBoardBackground = tabletopBackground(
-            tabletopMode,
+            activeTabletopMode,
             activePlayerColor,
             themedRadius(20),
             (int) boardLayoutSeed()
@@ -3108,6 +3810,7 @@ public final class MainActivity extends Activity {
             card.setReducedMotion(reducedMotion);
             card.setHighContrast(highContrast);
             card.setColorBlindPatterns(colorBlindPalette);
+            card.setElevation(dp(themedElevation(1)));
             card.setContent(
                 icons[game.getPairId(index)],
                 wordMode,
@@ -3580,9 +4283,13 @@ public final class MainActivity extends Activity {
 
         int player = game.getCurrentPlayer();
         int color = playerColor(player);
-        int textColor = contrastTextColor(color);
+        GameThemeChrome.Treatment treatment = gameThemeTreatment(color);
+        int textColor = treatment.getHeaderTextColor();
         FrameLayout overlay = new FrameLayout(this);
-        overlay.setBackgroundColor(color);
+        overlay.setBackground(gameThemeChromeDrawable(
+            GameThemeChromeDrawable.Region.SURROUND,
+            treatment
+        ));
         overlay.setClickable(true);
         overlay.setFocusable(true);
         overlay.setContentDescription(
@@ -3592,6 +4299,11 @@ public final class MainActivity extends Activity {
         LinearLayout panel = verticalLayout();
         panel.setGravity(Gravity.CENTER_HORIZONTAL);
         panel.setPadding(dp(24), dp(22), dp(24), dp(22));
+        panel.setBackground(gameThemeChromeDrawable(
+            GameThemeChromeDrawable.Region.HEADER,
+            treatment
+        ));
+        panel.setElevation(dp(themedElevation(5)));
         PlayerAvatarView avatar = new PlayerAvatarView(this);
         bindPlayerAvatar(avatar, player);
         panel.addView(avatar, centered(dp(112), dp(112)));
@@ -3608,14 +4320,13 @@ public final class MainActivity extends Activity {
         prompt.setPadding(dp(24), dp(13), dp(24), dp(13));
         prompt.setBackground(outlined(withAlpha(textColor, 34), textColor, 2, 18));
         panel.addView(prompt, margins(wrapWrap(), 0, 22, 0, 0));
-        overlay.addView(
-            panel,
-            new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER
-            )
+        FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.CENTER
         );
+        panelParams.setMargins(dp(18), 0, dp(18), 0);
+        overlay.addView(panel, panelParams);
 
         overlay.setOnClickListener(view -> dismissTurnHandoffOverlay());
         turnHandoffOverlay = overlay;
@@ -3654,15 +4365,20 @@ public final class MainActivity extends Activity {
         }
         int player = game.getCurrentPlayer();
         int playerBackground = playerColor(player);
-        int headerText = contrastTextColor(playerBackground);
-        applyActivePlayerChrome(playerBackground);
+        GameThemeChrome.Treatment treatment = gameThemeTreatment(playerBackground);
+        int headerText = treatment.getHeaderTextColor();
+        applyActivePlayerChrome(playerBackground, treatment);
         if (renderedHeaderPlayer != player) {
             bindPlayerAvatar(turnAvatar, player);
             turnName.setTextColor(headerText);
             turnMessage.setTextColor(headerText);
             progressText.setTextColor(headerText);
             leaveGameButton.setTextColor(headerText);
-            leaveGameButton.setBackground(ripple(withAlpha(headerText, 38), 12));
+            leaveGameButton.setBackground(
+                highContrast
+                    ? borderedRipple(withAlpha(headerText, 72), headerText, 2, 12)
+                    : ripple(withAlpha(headerText, 38), 12)
+            );
             turnName.setText(
                 game.isComputerMode() && player == 1
                     ? "Bot • " + selectedDifficulty.getDisplayName()
@@ -3685,27 +4401,52 @@ public final class MainActivity extends Activity {
         renderScoreRow();
     }
 
-    private void applyActivePlayerChrome(int playerBackground) {
+    private void applyActivePlayerChrome(
+        int playerBackground,
+        GameThemeChrome.Treatment treatment
+    ) {
+        activeGameThemeTreatment = treatment;
         if (playerChromeApplied && appliedPlayerChromeColor == playerBackground) {
             return;
         }
         if (gameHost != null) {
-            gameHost.setBackground(gameSurroundBackground(playerBackground));
-        }
-        if (gameRoot != null) {
-            gameRoot.setBackground(gameSurroundBackground(playerBackground));
+            if (gameSurroundChrome == null) {
+                gameSurroundChrome = gameThemeChromeDrawable(
+                    GameThemeChromeDrawable.Region.SURROUND,
+                    treatment
+                );
+                gameHost.setBackground(gameSurroundChrome);
+            } else {
+                gameSurroundChrome.setTreatment(treatment);
+            }
         }
         if (gameHeader != null) {
-            gameHeader.setBackgroundColor(playerBackground);
+            if (gameHeaderChrome == null) {
+                gameHeaderChrome = gameThemeChromeDrawable(
+                    GameThemeChromeDrawable.Region.HEADER,
+                    treatment
+                );
+                gameHeader.setBackground(gameHeaderChrome);
+            } else {
+                gameHeaderChrome.setTreatment(treatment);
+            }
         }
         if (gameBoardSection != null) {
-            gameBoardSection.setBackground(gameSurroundBackground(playerBackground));
+            if (gameBoardFrameChrome == null) {
+                gameBoardFrameChrome = gameThemeChromeDrawable(
+                    GameThemeChromeDrawable.Region.BOARD_FRAME,
+                    treatment
+                );
+                gameBoardSection.setBackground(gameBoardFrameChrome);
+            } else {
+                gameBoardFrameChrome.setTreatment(treatment);
+            }
         }
         if (boardLayout != null) {
             if (tabletopBoardBackground == null
-                || tabletopBoardBackground.getMode() != tabletopMode) {
+                || tabletopBoardBackground.getMode() != activeTabletopMode) {
                 tabletopBoardBackground = tabletopBackground(
-                    tabletopMode,
+                    activeTabletopMode,
                     playerBackground,
                     themedRadius(20),
                     (int) boardLayoutSeed()
@@ -3715,50 +4456,34 @@ public final class MainActivity extends Activity {
                 tabletopBoardBackground.setPlayerColor(playerBackground);
             }
         }
-        setWindowBackground(playerBackground);
+        setWindowBackground(treatment.getSurroundEnd());
         appliedPlayerChromeColor = playerBackground;
         playerChromeApplied = true;
     }
 
-    private GradientDrawable gameSurroundBackground(int playerColor) {
-        GradientDrawable background = new GradientDrawable();
-        ThemeVisualStyle style = currentThemeVisualStyle();
-        if (style == ThemeVisualStyle.CLASSIC) {
-            background.setColor(playerColor);
-            return background;
-        }
-        float middleBlend;
-        float endBlend;
-        switch (style) {
-            case GLASS:
-                middleBlend = 0.38f;
-                endBlend = 0.68f;
-                break;
-            case ARCADE:
-                middleBlend = 0.58f;
-                endBlend = 0.82f;
-                break;
-            case PAPER:
-            case FLAT:
-                middleBlend = 0.24f;
-                endBlend = 0.48f;
-                break;
-            case BUBBLE:
-                middleBlend = 0.32f;
-                endBlend = 0.62f;
-                break;
-            default:
-                middleBlend = 0f;
-                endBlend = 0f;
-                break;
-        }
-        background.setOrientation(GradientDrawable.Orientation.TOP_BOTTOM);
-        background.setColors(new int[] {
+    private GameThemeChrome.Treatment gameThemeTreatment(int playerColor) {
+        return GameThemeChrome.treatment(
+            GameThemeChrome.Style.valueOf(currentThemeVisualStyle().name()),
             playerColor,
-            GameSurfaceColors.blend(playerColor, BACKGROUND, middleBlend),
-            GameSurfaceColors.blend(playerColor, BACKGROUND, endBlend)
-        });
-        return background;
+            BACKGROUND,
+            SURFACE,
+            DIVIDER,
+            PRIMARY,
+            ACCENT,
+            highContrast,
+            darkTheme
+        );
+    }
+
+    private GameThemeChromeDrawable gameThemeChromeDrawable(
+        GameThemeChromeDrawable.Region region,
+        GameThemeChrome.Treatment treatment
+    ) {
+        return new GameThemeChromeDrawable(
+            getResources().getDisplayMetrics().density,
+            region,
+            treatment
+        );
     }
 
     private TabletopBackgroundDrawable tabletopBackground(
@@ -3767,15 +4492,71 @@ public final class MainActivity extends Activity {
         float radiusDp,
         int patternSeed
     ) {
+        TabletopMode safeMode = mode != null && mode.isConcrete()
+            ? mode
+            : TabletopMode.STATIC_THEME;
         return new TabletopBackgroundDrawable(
             this,
-            mode,
+            safeMode,
             playerColor,
             SURFACE,
             DIVIDER,
             darkTheme,
             radiusDp
         ).setPatternSeed(patternSeed);
+    }
+
+    private View tabletopModePreview(TabletopMode mode) {
+        if (mode == null || mode.isConcrete()) {
+            View preview = new View(this);
+            preview.setBackground(tabletopBackground(
+                mode,
+                PRIMARY,
+                themedRadius(8),
+                0x51A7E000 ^ (mode == null ? 0 : mode.ordinal())
+            ));
+            configureDecorativePreview(preview);
+            return preview;
+        }
+
+        LinearLayout preview = horizontalLayout();
+        preview.setPadding(dp(1), dp(1), dp(1), dp(1));
+        preview.setBackground(outlined(SURFACE, DIVIDER, 1, 8));
+        TabletopMode[] samples = {
+            TabletopMode.STATIC_THEME,
+            TabletopMode.WATER,
+            TabletopMode.NEON
+        };
+        for (int index = 0; index < samples.length; index++) {
+            View sample = new View(this);
+            sample.setBackground(tabletopBackground(
+                samples[index],
+                PRIMARY,
+                themedRadius(5),
+                0x51A7E500 ^ index
+            ));
+            configureDecorativePreview(sample);
+            preview.addView(
+                sample,
+                margins(
+                    weighted(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f),
+                    index == 0 ? 0 : 1,
+                    0,
+                    0,
+                    0
+                )
+            );
+        }
+        configureDecorativePreview(preview);
+        return preview;
+    }
+
+    private void configureDecorativePreview(View preview) {
+        preview.setClickable(false);
+        preview.setFocusable(false);
+        preview.setImportantForAccessibility(
+            View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        );
     }
 
     private void renderScoreRow() {
@@ -3797,12 +4578,12 @@ public final class MainActivity extends Activity {
             scoreRow.removeAllViews();
             scoreChipViews = new TextView[playerCount];
             for (int player = 0; player < playerCount; player++) {
-                TextView chip = label("", 12, Color.WHITE, true);
+                TextView chip = label("", 14, Color.WHITE, true);
                 chip.setGravity(Gravity.CENTER);
-                chip.setMinWidth(dp(62));
-                chip.setMinHeight(dp(34));
-                chip.setPadding(dp(11), dp(6), dp(11), dp(6));
-                scoreRow.addView(chip, margins(wrapWrap(), 0, 0, 8, 0));
+                chip.setMinWidth(dp(72));
+                chip.setMinHeight(dp(42));
+                chip.setPadding(dp(13), dp(8), dp(13), dp(8));
+                scoreRow.addView(chip, margins(wrapWrap(), 0, 0, 9, 0));
                 scoreChipViews[player] = chip;
             }
         }
@@ -3815,10 +4596,9 @@ public final class MainActivity extends Activity {
             || activePlayerChanged
             || renderedScoreFinished != finished;
         int activeColor = playerColor(game.getCurrentPlayer());
-        int headerText = contrastTextColor(activeColor);
-        int inactiveFill = headerText == Color.WHITE
-            ? withAlpha(Color.BLACK, 42)
-            : withAlpha(Color.WHITE, 55);
+        GameThemeChrome.Treatment treatment = activeGameThemeTreatment == null
+            ? gameThemeTreatment(activeColor)
+            : activeGameThemeTreatment;
         for (int player = 0; player < playerCount; player++) {
             TextView chip = scoreChipViews[player];
             boolean scoreChanged = rebuild
@@ -3833,13 +4613,22 @@ public final class MainActivity extends Activity {
             }
             if (activeStyleChanged) {
                 boolean current = player == activePlayer && !finished;
-                chip.setTextColor(current ? activeColor : headerText);
+                ScoreChipColors.Treatment scoreTreatment = ScoreChipColors.treatment(
+                    playerColor(player),
+                    treatment.getHeaderColor(),
+                    SURFACE,
+                    current,
+                    highContrast,
+                    darkTheme
+                );
+                chip.setTextColor(scoreTreatment.getTextColor());
                 chip.setBackground(outlined(
-                    current ? headerText : inactiveFill,
-                    headerText,
-                    current ? 0 : 1,
+                    scoreTreatment.getFillColor(),
+                    scoreTreatment.getOutlineColor(),
+                    scoreTreatment.getStrokeWidthDp(),
                     12
                 ));
+                chip.setElevation(dp(current ? themedElevation(2) : 0));
             }
         }
 
@@ -4161,6 +4950,16 @@ public final class MainActivity extends Activity {
             card.addView(metrics, margins(matchWrap(), 0, 3, 0, 0));
         }
 
+        View highlightsDivider = new View(this);
+        highlightsDivider.setBackgroundColor(DIVIDER);
+        card.addView(
+            highlightsDivider,
+            margins(fixed(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)), 0, 13, 0, 12)
+        );
+        TextView highlightsLabel = label("ROUND HIGHLIGHTS", 10, PRIMARY, true);
+        highlightsLabel.setLetterSpacing(0.1f);
+        card.addView(highlightsLabel, matchWrap());
+
         int comeback = gameStats.getComebackParticipant();
         TextView comebackText = label(
             comeback == GameStats.NO_PARTICIPANT
@@ -4173,7 +4972,7 @@ public final class MainActivity extends Activity {
             comeback == GameStats.NO_PARTICIPANT ? MUTED : SUCCESS,
             true
         );
-        comebackText.setPadding(0, dp(12), 0, 0);
+        comebackText.setPadding(0, dp(7), 0, 0);
         card.addView(comebackText, matchWrap());
 
         int[] quickest = gameStats.getQuickestParticipants();
@@ -4247,7 +5046,9 @@ public final class MainActivity extends Activity {
         LinearLayout card = horizontalLayout();
         card.setGravity(Gravity.CENTER_VERTICAL);
         card.setPadding(dp(16), dp(winner ? 17 : 13), dp(16), dp(winner ? 17 : 13));
-        int winnerFill = withAlpha(ACCENT, darkTheme ? 58 : 42);
+        int winnerFill = highContrast
+            ? GameSurfaceColors.blend(SURFACE, ACCENT, darkTheme ? 0.14f : 0.09f)
+            : withAlpha(ACCENT, darkTheme ? 58 : 42);
         int winnerText = darkTheme ? ACCENT : PRIMARY_DARK;
         card.setBackground(outlined(
             winner ? winnerFill : SURFACE,
@@ -4450,9 +5251,18 @@ public final class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        handleBackNavigation();
+    }
+
+    private void handleBackNavigation() {
         if (screen == Screen.GAME) {
-            confirmLeaveGame();
-        } else if (screen == Screen.RESULTS) {
+            // Gameplay can only be left through the explicit top-right X control.
+            return;
+        }
+        if (screen == Screen.HISTORY && dismissHistoryEntryDetails(true)) {
+            return;
+        }
+        if (screen == Screen.RESULTS) {
             showSetupScreen();
         } else if (screen == Screen.PROFILES) {
             saveProfileNamesFromInputs();
@@ -4460,10 +5270,21 @@ public final class MainActivity extends Activity {
         } else if (screen == Screen.ADVANCED) {
             showSetupScreen();
         } else if (screen == Screen.HISTORY) {
-            showSetupScreen();
+            leaveHistoryScreen();
         } else {
-            super.onBackPressed();
+            finishAndRemoveTask();
         }
+    }
+
+    private void configureBackNavigation() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return;
+        }
+        backInvokedCallback = this::handleBackNavigation;
+        getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+            OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+            backInvokedCallback
+        );
     }
 
     @Override
@@ -4513,6 +5334,13 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         cancelPendingActions();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+            && backInvokedCallback != null) {
+            getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(
+                backInvokedCallback
+            );
+            backInvokedCallback = null;
+        }
         if (gameFeedback != null) {
             gameFeedback.release();
         }
@@ -4885,41 +5713,92 @@ public final class MainActivity extends Activity {
                     break;
             }
         }
+        if (highContrast) {
+            applyHighContrastPalette();
+        }
         setWindowBackground(BACKGROUND);
     }
 
-    private void showThemePicker() {
-        ThemePreset[] presets = ThemePreset.selectable();
-        String[] names = new String[presets.length];
-        int selected = 0;
-        for (int index = 0; index < presets.length; index++) {
-            names[index] = presets[index].displayName;
-            if (presets[index] == themePreset) {
-                selected = index;
-            }
+    private void applyHighContrastPalette() {
+        int contrastTarget = darkTheme ? Color.WHITE : Color.BLACK;
+        if (darkTheme) {
+            BACKGROUND = GameSurfaceColors.blend(BACKGROUND, Color.BLACK, 0.64f);
+            SURFACE = ContrastColors.ensureMinimumContrast(
+                SURFACE,
+                Color.WHITE,
+                1.45,
+                BACKGROUND
+            );
+            SURFACE_TINT = ContrastColors.ensureMinimumContrast(
+                SURFACE_TINT,
+                Color.WHITE,
+                1.30,
+                SURFACE
+            );
+            INK = Color.WHITE;
+        } else {
+            SURFACE = Color.WHITE;
+            BACKGROUND = ContrastColors.ensureMinimumContrast(
+                GameSurfaceColors.blend(BACKGROUND, Color.BLACK, 0.08f),
+                Color.BLACK,
+                1.24,
+                SURFACE
+            );
+            SURFACE_TINT = ContrastColors.ensureMinimumContrast(
+                SURFACE_TINT,
+                Color.BLACK,
+                1.45,
+                SURFACE
+            );
+            INK = Color.BLACK;
         }
-        int dialogTheme = darkTheme
-            ? android.R.style.Theme_Material_Dialog_Alert
-            : android.R.style.Theme_Material_Light_Dialog_Alert;
-        AlertDialog dialog = new AlertDialog.Builder(this, dialogTheme)
-            .setTitle("Choose a theme")
-            .setSingleChoiceItems(names, selected, (picker, which) -> {
-                themePreset = presets[which];
-                darkTheme = resolveDarkTheme(themePreset);
-                getSharedPreferences(SETTINGS, MODE_PRIVATE)
-                    .edit()
-                    .putString(THEME_PRESET, themePreset.name())
-                    .putBoolean(DARK_THEME, darkTheme)
-                    .apply();
-                picker.dismiss();
-                applyThemePalette();
-                showAdvancedSettingsScreen();
-            })
-            .setNegativeButton("Cancel", (ignored, which) -> pendingAdvancedScrollY = -1)
-            .create();
-        dialog.setOnCancelListener(ignored -> pendingAdvancedScrollY = -1);
-        dialog.show();
-        keepDialogImmersive(dialog);
+
+        MUTED = ContrastColors.ensureMinimumContrast(
+            MUTED,
+            contrastTarget,
+            4.5,
+            SURFACE,
+            SURFACE_TINT,
+            BACKGROUND
+        );
+        PRIMARY = ContrastColors.ensureMinimumContrast(
+            PRIMARY,
+            contrastTarget,
+            4.5,
+            SURFACE,
+            SURFACE_TINT,
+            BACKGROUND
+        );
+        PRIMARY_DARK = ContrastColors.ensureMinimumContrast(
+            PRIMARY_DARK,
+            contrastTarget,
+            4.5,
+            SURFACE,
+            SURFACE_TINT,
+            BACKGROUND
+        );
+        ACCENT = ContrastColors.ensureMinimumContrast(
+            ACCENT,
+            contrastTarget,
+            4.5,
+            SURFACE,
+            BACKGROUND
+        );
+        SUCCESS = ContrastColors.ensureMinimumContrast(
+            SUCCESS,
+            contrastTarget,
+            4.5,
+            SURFACE,
+            BACKGROUND
+        );
+        DIVIDER = ContrastColors.ensureMinimumContrast(
+            DIVIDER,
+            contrastTarget,
+            3.0,
+            SURFACE,
+            SURFACE_TINT,
+            BACKGROUND
+        );
     }
 
     private boolean resolveDarkTheme(ThemePreset preset) {
@@ -5061,6 +5940,50 @@ public final class MainActivity extends Activity {
         button.setVisibility(View.VISIBLE);
     }
 
+    private void configureStickyBack(
+        FrameLayout host,
+        ScrollView scroll,
+        View anchor,
+        TextView button
+    ) {
+        Runnable update = () -> updateStickyBackPosition(host, anchor, button);
+        scroll.getViewTreeObserver().addOnScrollChangedListener(update::run);
+        host.addOnLayoutChangeListener(
+            (view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) ->
+                update.run()
+        );
+        anchor.addOnLayoutChangeListener(
+            (view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) ->
+                update.run()
+        );
+        host.getViewTreeObserver().addOnGlobalLayoutListener(update::run);
+        host.post(update);
+    }
+
+    private void updateStickyBackPosition(
+        FrameLayout host,
+        View anchor,
+        TextView button
+    ) {
+        if (!host.isAttachedToWindow()
+            || !anchor.isAttachedToWindow()
+            || anchor.getWidth() <= 0
+            || anchor.getHeight() <= 0) {
+            return;
+        }
+        int[] hostLocation = new int[2];
+        int[] anchorLocation = new int[2];
+        host.getLocationInWindow(hostLocation);
+        anchor.getLocationInWindow(anchorLocation);
+        int naturalLeft = anchorLocation[0] - hostLocation[0];
+        int naturalTop = anchorLocation[1] - hostLocation[1];
+        int safeTop = host.getPaddingTop();
+
+        button.setX(Math.max(host.getPaddingLeft(), naturalLeft));
+        button.setY(Math.max(safeTop, naturalTop));
+        button.setVisibility(View.VISIBLE);
+    }
+
     private void restoreScrollBeforeFirstDraw(ScrollView scroll, int scrollY) {
         scroll.getViewTreeObserver().addOnPreDrawListener(
             new ViewTreeObserver.OnPreDrawListener() {
@@ -5174,7 +6097,11 @@ public final class MainActivity extends Activity {
             drawable.setColor(themedFill(color));
         }
         drawable.setCornerRadius(dp(themedRadius(radiusDp)));
-        if (style == ThemeVisualStyle.ARCADE
+        if (highContrast && (color == SURFACE || color == SURFACE_TINT)) {
+            drawable.setStroke(dp(2), DIVIDER);
+        } else if (highContrast && (color == PRIMARY || color == ACCENT)) {
+            drawable.setStroke(dp(2), contrastTextColor(color));
+        } else if (style == ThemeVisualStyle.ARCADE
             && (color == SURFACE || color == SURFACE_TINT)) {
             drawable.setStroke(dp(1), withAlpha(PRIMARY, 170));
         } else if (style == ThemeVisualStyle.PAPER
@@ -5187,20 +6114,22 @@ public final class MainActivity extends Activity {
     private GradientDrawable outlined(int fillColor, int strokeColor, int strokeDp, int radiusDp) {
         GradientDrawable drawable = rounded(fillColor, radiusDp);
         if (strokeDp > 0) {
-            drawable.setStroke(dp(strokeDp), strokeColor);
+            drawable.setStroke(dp(highContrast ? Math.max(2, strokeDp) : strokeDp), strokeColor);
         }
         return drawable;
     }
 
     private RippleDrawable ripple(int color, int radiusDp) {
         GradientDrawable content = rounded(color, radiusDp);
-        if (currentThemeVisualStyle() == ThemeVisualStyle.ARCADE) {
+        if (!highContrast && currentThemeVisualStyle() == ThemeVisualStyle.ARCADE) {
             content.setStroke(dp(2), withAlpha(color == PRIMARY ? ACCENT : PRIMARY, 205));
         }
         GradientDrawable mask = new GradientDrawable();
         mask.setColor(Color.WHITE);
         mask.setCornerRadius(dp(themedRadius(radiusDp)));
-        int rippleColor = currentThemeVisualStyle() == ThemeVisualStyle.ARCADE
+        int rippleColor = highContrast
+            ? withAlpha(contrastTextColor(color), 105)
+            : currentThemeVisualStyle() == ThemeVisualStyle.ARCADE
             ? withAlpha(ACCENT, 95)
             : Color.argb(45, 255, 255, 255);
         return new RippleDrawable(
@@ -5210,8 +6139,30 @@ public final class MainActivity extends Activity {
         );
     }
 
+    private RippleDrawable borderedRipple(
+        int fillColor,
+        int borderColor,
+        int borderDp,
+        int radiusDp
+    ) {
+        GradientDrawable content = rounded(fillColor, radiusDp);
+        content.setStroke(dp(borderDp), borderColor);
+        GradientDrawable mask = new GradientDrawable();
+        mask.setColor(Color.WHITE);
+        mask.setCornerRadius(dp(themedRadius(radiusDp)));
+        return new RippleDrawable(
+            ColorStateList.valueOf(withAlpha(borderColor, 72)),
+            content,
+            mask
+        );
+    }
+
     private ThemeVisualStyle currentThemeVisualStyle() {
-        switch (themePreset) {
+        return themeVisualStyle(themePreset);
+    }
+
+    private ThemeVisualStyle themeVisualStyle(ThemePreset preset) {
+        switch (preset) {
             case MINIMAL_LIGHT:
             case MINIMAL_DARK:
             case DARK_VIBRANT_WHITE:
@@ -5227,6 +6178,159 @@ public final class MainActivity extends Activity {
                 return ThemeVisualStyle.PAPER;
             default:
                 return ThemeVisualStyle.CLASSIC;
+        }
+    }
+
+    private ThemePreviewPalette themePreviewPalette(ThemePreset preset) {
+        boolean dark = resolveDarkTheme(preset);
+        if (dark) {
+            switch (preset) {
+                case MINIMAL_DARK:
+                case DARK_VIBRANT_WHITE:
+                    return new ThemePreviewPalette(
+                        Color.rgb(16, 17, 18), Color.rgb(25, 27, 29),
+                        Color.rgb(36, 39, 42), Color.rgb(244, 244, 242),
+                        Color.rgb(232, 232, 227), Color.rgb(202, 204, 200), true
+                    );
+                case SIMPLE:
+                    return new ThemePreviewPalette(
+                        Color.rgb(17, 24, 39), Color.rgb(31, 41, 55),
+                        Color.rgb(41, 53, 72), Color.rgb(245, 246, 251),
+                        Color.rgb(96, 165, 250), Color.rgb(251, 191, 36), true
+                    );
+                case MIXED_COLOR:
+                    return new ThemePreviewPalette(
+                        Color.rgb(23, 18, 37), Color.rgb(36, 28, 53),
+                        Color.rgb(50, 37, 69), Color.rgb(248, 245, 255),
+                        Color.rgb(167, 139, 250), Color.rgb(251, 113, 133), true
+                    );
+                case DARK_ORANGE:
+                case DARK_VIBRANT_ORANGE:
+                    return new ThemePreviewPalette(
+                        Color.rgb(24, 8, 1), Color.rgb(46, 18, 5),
+                        Color.rgb(70, 29, 7), Color.rgb(245, 246, 251),
+                        Color.rgb(255, 109, 0), Color.rgb(255, 225, 55), true
+                    );
+                case DARK_BLUE:
+                    return new ThemePreviewPalette(
+                        Color.rgb(13, 20, 32), Color.rgb(23, 34, 52),
+                        Color.rgb(32, 48, 72), Color.rgb(245, 246, 251),
+                        Color.rgb(70, 140, 255), Color.rgb(255, 187, 80), true
+                    );
+                case DARK_ROSE:
+                    return new ThemePreviewPalette(
+                        Color.rgb(28, 16, 23), Color.rgb(47, 26, 39),
+                        Color.rgb(66, 36, 53), Color.rgb(245, 246, 251),
+                        Color.rgb(234, 83, 145), Color.rgb(255, 192, 92), true
+                    );
+                case DARK_VIBRANT_CYAN:
+                    return new ThemePreviewPalette(
+                        Color.rgb(1, 15, 20), Color.rgb(5, 32, 40),
+                        Color.rgb(7, 52, 64), Color.rgb(245, 246, 251),
+                        Color.rgb(0, 221, 242), Color.rgb(255, 225, 55), true
+                    );
+                case DARK_VIBRANT_LIME:
+                    return new ThemePreviewPalette(
+                        Color.rgb(8, 17, 3), Color.rgb(20, 38, 9),
+                        Color.rgb(34, 58, 14), Color.rgb(245, 246, 251),
+                        Color.rgb(183, 240, 0), Color.rgb(255, 87, 125), true
+                    );
+                case DARK_VIBRANT_PINK:
+                    return new ThemePreviewPalette(
+                        Color.rgb(24, 3, 16), Color.rgb(47, 8, 32),
+                        Color.rgb(72, 13, 49), Color.rgb(245, 246, 251),
+                        Color.rgb(255, 45, 149), Color.rgb(0, 229, 255), true
+                    );
+                case GLASS:
+                    return new ThemePreviewPalette(
+                        Color.rgb(8, 21, 33), Color.rgb(29, 48, 72),
+                        Color.rgb(82, 109, 135), Color.rgb(246, 251, 255),
+                        Color.rgb(105, 221, 244), Color.rgb(255, 179, 107), true
+                    );
+                case ARCADE:
+                    return new ThemePreviewPalette(
+                        Color.rgb(3, 7, 18), Color.rgb(13, 20, 34),
+                        Color.rgb(21, 34, 57), Color.rgb(248, 254, 255),
+                        Color.rgb(0, 245, 212), Color.rgb(255, 61, 165), true
+                    );
+                case SYSTEM:
+                case DARK_TEAL:
+                    return new ThemePreviewPalette(
+                        Color.rgb(12, 22, 23), Color.rgb(22, 38, 39),
+                        Color.rgb(31, 55, 55), Color.rgb(245, 246, 251),
+                        Color.rgb(38, 190, 173), Color.rgb(255, 190, 78), true
+                    );
+                case DARK_VIOLET:
+                default:
+                    return new ThemePreviewPalette(
+                        Color.rgb(17, 19, 29), Color.rgb(29, 33, 48),
+                        Color.rgb(40, 44, 62), Color.rgb(245, 246, 251),
+                        Color.rgb(139, 124, 255), Color.rgb(255, 183, 77), true
+                    );
+            }
+        }
+        switch (preset) {
+            case MINIMAL_LIGHT:
+                return new ThemePreviewPalette(
+                    Color.rgb(247, 247, 245), Color.WHITE, Color.rgb(236, 237, 235),
+                    Color.rgb(32, 33, 36), Color.rgb(48, 50, 54),
+                    Color.rgb(217, 219, 215), false
+                );
+            case SIMPLE:
+                return new ThemePreviewPalette(
+                    Color.rgb(246, 247, 249), Color.WHITE, Color.rgb(234, 240, 247),
+                    Color.rgb(31, 41, 55), Color.rgb(37, 99, 235),
+                    Color.rgb(245, 158, 11), false
+                );
+            case MIXED_COLOR:
+                return new ThemePreviewPalette(
+                    Color.rgb(255, 247, 243), Color.WHITE, Color.rgb(241, 232, 255),
+                    Color.rgb(45, 33, 64), Color.rgb(124, 58, 237),
+                    Color.rgb(219, 39, 119), false
+                );
+            case LIGHT_ORANGE:
+                return new ThemePreviewPalette(
+                    Color.rgb(252, 247, 240), Color.WHITE, Color.rgb(252, 234, 213),
+                    Color.rgb(54, 37, 27), Color.rgb(218, 101, 29),
+                    Color.rgb(232, 139, 38), false
+                );
+            case LIGHT_BLUE:
+                return new ThemePreviewPalette(
+                    Color.rgb(243, 247, 253), Color.WHITE, Color.rgb(224, 235, 251),
+                    Color.rgb(25, 43, 69), Color.rgb(38, 103, 211),
+                    Color.rgb(220, 132, 27), false
+                );
+            case LIGHT_ROSE:
+                return new ThemePreviewPalette(
+                    Color.rgb(253, 245, 249), Color.WHITE, Color.rgb(249, 225, 237),
+                    Color.rgb(65, 31, 49), Color.rgb(196, 48, 111),
+                    Color.rgb(220, 130, 35), false
+                );
+            case GLASS:
+                return new ThemePreviewPalette(
+                    Color.rgb(232, 245, 255), Color.WHITE, Color.rgb(222, 239, 249),
+                    Color.rgb(24, 47, 65), Color.rgb(20, 126, 163),
+                    Color.rgb(217, 107, 36), false
+                );
+            case PAPER:
+                return new ThemePreviewPalette(
+                    Color.rgb(242, 225, 189), Color.rgb(255, 249, 232),
+                    Color.rgb(243, 224, 185), Color.rgb(59, 42, 28),
+                    Color.rgb(184, 76, 50), Color.rgb(211, 154, 32), false
+                );
+            case SYSTEM:
+            case LIGHT_TEAL:
+                return new ThemePreviewPalette(
+                    Color.rgb(242, 249, 248), Color.WHITE, Color.rgb(219, 241, 238),
+                    Color.rgb(25, 52, 51), Color.rgb(0, 137, 123),
+                    Color.rgb(227, 146, 44), false
+                );
+            default:
+                return new ThemePreviewPalette(
+                    Color.rgb(247, 245, 239), Color.WHITE, Color.rgb(239, 237, 249),
+                    Color.rgb(29, 33, 55), Color.rgb(91, 75, 219),
+                    Color.rgb(255, 183, 77), false
+                );
         }
     }
 
@@ -5272,6 +6376,9 @@ public final class MainActivity extends Activity {
     }
 
     private int themedFill(int color) {
+        if (highContrast) {
+            return color;
+        }
         switch (currentThemeVisualStyle()) {
             case GLASS:
                 if (color == SURFACE) {
@@ -5333,6 +6440,12 @@ public final class MainActivity extends Activity {
 
     private void applyScreenBackground(View view) {
         GradientDrawable background;
+        if (highContrast) {
+            background = new GradientDrawable();
+            background.setColor(BACKGROUND);
+            view.setBackground(background);
+            return;
+        }
         switch (currentThemeVisualStyle()) {
             case GLASS:
                 background = new GradientDrawable(

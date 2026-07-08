@@ -41,6 +41,24 @@ public final class GameHistoryCodecTest {
         assertEquals(2L, decoded.getEntry(1).getCompletedAtEpochMillis());
     }
 
+    @Test
+    public void deletionTotalsAndRemainingRowsSurvivePersistenceRoundTrip() {
+        GameHistory history = GameHistory.empty(3);
+        history.record(entry(1L));
+        history.record(entry(2L));
+        history.record(entry(3L));
+        history.removeRetainedGame(1);
+
+        GameHistory decoded = GameHistoryCodec.decode(GameHistoryCodec.encode(history), 3);
+
+        assertEquals(2L, decoded.getTotalGamesPlayed());
+        assertEquals(2_000L, decoded.getTotalActiveDurationMillis());
+        assertEquals(4L, decoded.getTotalPairsPlayed());
+        assertEquals(2, decoded.getRetainedGameCount());
+        assertEquals(3L, decoded.getEntry(0).getCompletedAtEpochMillis());
+        assertEquals(1L, decoded.getEntry(1).getCompletedAtEpochMillis());
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void malformedHexIsRejected() {
         GameHistoryCodec.decode("not history", 10);

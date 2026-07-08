@@ -1,38 +1,34 @@
-# Peek-a-Pair 3.4.0 — Shuffle the Table
+# Peek-a-Pair 3.10.0 — Cleaner Tables, Clearer Scores
 
-Peek-a-Pair 3.4.0 makes customization faster to navigate and gives every tabletop—and even every card—more personality.
+Peek-a-Pair 3.10.0 gives the game screen a calmer visual hierarchy and makes every player's score immediately readable.
 
-## Tabletop backgrounds
+## Themes, refined
 
-- Added five patterned surfaces: **Tiles**, **Mosaic**, **Glass tiles**, **Dots**, and **Contours**.
-- Kept the existing Theme black/white and Player tint choices for a total of seven tabletop options.
-- Every option now includes a small live preview on the left of its selector.
-- Pattern colors remain subtle, theme-aware, and tied to the current player without reducing card readability.
-- Procedural patterns are deterministic and allocation-free while drawing.
+- Reworked the default theme so its deep teal surfaces remain visible instead of being replaced by a full-screen player color.
+- Every theme is now **theme-first**: the selected palette controls the backdrop, header, frame, outlines, and decoration.
+- The current player's exact color is reserved for concise identity cues—the header rule, avatar, active score, board border, and a subtle surrounding tint.
+- Regular dark and light palettes now remain visually distinct during play, not only in their selector previews.
+- Glass, Arcade, Paper, Bubble, Flat, and Classic decoration now incorporates each theme's primary and accent colors.
+- Simplified the default header shape and removed its heavy capsule-like outline.
 
-## Card-back shuffling
+## Scores you can scan
 
-- Added **Random each game**. Its first game after every app restart uses Classic; later games choose another design and never immediately repeat the previous one.
-- Added **Random across cards**, which shuffles all 15 designs across the cards on one table.
-- A card keeps its assigned design when it flips, moves, or survives an Activity recreation.
-- Mixed animated card backs continue to share the existing battery-conscious frame ticker and respect Reduced Motion.
-- Existing fixed card-back choices and saved preferences remain compatible.
-
-## Navigation polish
-
-- Removed the unnecessary Done buttons from Advanced Settings and Game History.
-- Their top-left back buttons now remain visible while the page scrolls.
-- Sticky navigation stays inside display-cutout safe areas and retains a 48 dp accessible touch target.
+- Increased score labels from 12sp to 14sp with larger 42dp-high, 72dp-wide touch-safe chips.
+- Every inactive player now receives an opaque, lightly player-tinted surface instead of disappearing into the header.
+- The active score keeps the player's exact color with a thicker contrasting outline and subtle elevation.
+- Score text maintains at least **4.5:1** contrast and chip boundaries at least **3:1** across all 15 player colors and representative light/dark themes.
+- High Contrast mode raises score text to at least **7:1** and uses 3dp boundaries.
+- The existing active-player auto-scroll continues to keep the current score visible in large groups.
 
 ## Compatibility
 
 - Android 6.0 (API 23) or newer
-- Version `3.4.0` (`versionCode 25`)
-- Existing player profiles, settings, and game history are preserved when updating from a build signed with the same key.
+- Version `3.10.0` (`versionCode 31`)
+- Existing profiles, preferences, series data, and game history remain compatible when updating from a build signed with the same key.
 
 ## Verification
 
-- Debug unit tests: 221 passed
-- Release unit tests: 221 passed
+- Debug unit tests: 275 passed
+- Release unit tests: 275 passed
 - Android lint: no issues found
 - Debug and unsigned release APK builds: successful

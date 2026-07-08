@@ -94,6 +94,22 @@ public final class GameHistory {
         }
     }
 
+    /**
+     * Removes one specific retained game and subtracts that game's contribution from the
+     * lifetime totals. Older games which have already fallen outside the retention cap remain
+     * represented by the totals.
+     */
+    public GameHistoryEntry removeRetainedGame(int newestFirstIndex) {
+        GameHistoryEntry removed = entries.remove(newestFirstIndex);
+        totalGamesPlayed = Math.subtractExact(totalGamesPlayed, 1L);
+        totalActiveDurationMillis = Math.subtractExact(
+            totalActiveDurationMillis,
+            removed.getActiveDurationMillis()
+        );
+        totalPairsPlayed = Math.subtractExact(totalPairsPlayed, removed.getPairCount());
+        return removed;
+    }
+
     public int getMaxEntries() {
         return maxEntries;
     }

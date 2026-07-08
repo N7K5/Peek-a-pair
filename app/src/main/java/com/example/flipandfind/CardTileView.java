@@ -95,6 +95,9 @@ public final class CardTileView extends View {
     private boolean reducedMotion;
     private boolean highContrast;
     private boolean colorBlindPatterns;
+    private CardBackStyle cachedHighContrastBackStyle;
+    private int cachedHighContrastBackPattern;
+    private int cachedHighContrastBackAccent;
     private float cornerRadiusFraction = 0.13f;
     private int pairColor = Color.rgb(91, 75, 219);
     private CardBackStyle cardBackStyle = CardBackStyle.CLASSIC;
@@ -299,6 +302,7 @@ public final class CardTileView extends View {
             return;
         }
         this.highContrast = highContrast;
+        setElevation(dp(highContrast ? 4f : 2f));
         invalidate();
     }
 
@@ -515,7 +519,7 @@ public final class CardTileView extends View {
         super.onDraw(canvas);
         paint.reset();
         paint.setAntiAlias(true);
-        float inset = dp(1.5f);
+        float inset = dp(highContrast ? 3f : 1.5f);
         bounds.set(inset, inset, getWidth() - inset, getHeight() - inset);
         float radius = Math.min(getWidth(), getHeight()) * cornerRadiusFraction;
 
@@ -533,17 +537,20 @@ public final class CardTileView extends View {
         paint.setColor(faceColor);
         canvas.drawRoundRect(bounds, radius, radius, paint);
         paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(dp(
-            matched ? (highContrast ? 3.5f : 2.5f)
-                : highContrast ? 4f
-                : (usePairColor ? 3.5f : 2f)
-        ));
-        paint.setColor(
-            matched ? MATCHED_BORDER
-                : highContrast ? contrastTextColor(faceColor)
-                : faceBorderColor()
-        );
+        paint.setStrokeWidth(dp(highContrast
+            ? matched ? 4.5f : 5f
+            : matched ? 2.5f : usePairColor ? 3.5f : 2f));
+        paint.setColor(highContrast
+            ? contrastTextColor(faceColor)
+            : matched ? MATCHED_BORDER : faceBorderColor());
         canvas.drawRoundRect(bounds, radius, radius, paint);
+        if (highContrast && (matched || usePairColor)) {
+            // Keep the pair/match color visible inside a guaranteed black-or-white outer edge.
+            // This preserves color-blind palette identity while adding shape and luminance contrast.
+            paint.setStrokeWidth(dp(2f));
+            paint.setColor(matched ? MATCHED_BORDER : pairColor);
+            canvas.drawRoundRect(bounds, radius, radius, paint);
+        }
         if (colorBlindPatterns) {
             drawPairPatternCue(canvas, faceColor);
         }
@@ -553,7 +560,9 @@ public final class CardTileView extends View {
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(MATCHED_BORDER);
             canvas.drawCircle(getWidth() - dp(10), dp(10), dp(6), paint);
-            paint.setColor(Color.WHITE);
+            paint.setColor(highContrast
+                ? contrastTextColor(MATCHED_BORDER)
+                : Color.WHITE);
             paint.setStrokeWidth(dp(1.8f));
             paint.setStyle(Paint.Style.STROKE);
             checkPath.reset();
@@ -640,8 +649,12 @@ public final class CardTileView extends View {
 
         // The border is last so even dense or dp-clamped patterns stay visually contained.
         paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(Math.max(dp(1f), minimum * 0.025f));
-        paint.setColor(style.getBorderColor());
+        paint.setStrokeWidth(highContrast
+            ? Math.max(dp(2.5f), minimum * 0.055f)
+            : Math.max(dp(1f), minimum * 0.025f));
+        paint.setColor(highContrast
+            ? contrastTextColor(style.getFillColor())
+            : style.getBorderColor());
         canvas.drawRoundRect(bounds, cornerRadius, cornerRadius, paint);
     }
 
@@ -654,7 +667,7 @@ public final class CardTileView extends View {
     ) {
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(Math.max(dp(1.3f), size * 0.10f));
-        paint.setColor(style.getPatternColor());
+        paint.setColor(cardBackPatternColor(style));
         shapePath.reset();
         shapePath.moveTo(centerX, centerY - size);
         shapePath.lineTo(centerX + size, centerY);
@@ -663,7 +676,7 @@ public final class CardTileView extends View {
         shapePath.close();
         canvas.drawPath(shapePath, paint);
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(style.getAccentColor());
+        paint.setColor(cardBackAccentColor(style));
         canvas.drawCircle(centerX, centerY, Math.max(dp(1.6f), size * 0.16f), paint);
     }
 
@@ -676,7 +689,7 @@ public final class CardTileView extends View {
     ) {
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(Math.max(dp(0.8f), minimum * 0.018f));
-        paint.setColor(style.getPatternColor());
+        paint.setColor(cardBackPatternColor(style));
         shapePath.reset();
         for (int index = 0; index < constellationX.length; index++) {
             float x = centerX + constellationX[index] * minimum;
@@ -691,7 +704,9 @@ public final class CardTileView extends View {
         paint.setStyle(Paint.Style.FILL);
         for (int index = 0; index < constellationX.length; index++) {
             boolean accented = index == constellationAccentIndex;
-            paint.setColor(accented ? style.getAccentColor() : style.getPatternColor());
+            paint.setColor(accented
+                ? cardBackAccentColor(style)
+                : cardBackPatternColor(style));
             float radius = minimum * (accented ? 0.045f : 0.027f);
             canvas.drawCircle(
                 centerX + constellationX[index] * minimum,
@@ -711,7 +726,7 @@ public final class CardTileView extends View {
     ) {
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(Math.max(dp(1f), minimum * 0.025f));
-        paint.setColor(style.getPatternColor());
+        paint.setColor(cardBackPatternColor(style));
         for (int ray = 0; ray < 12; ray++) {
             double angle = Math.toRadians(ray * 30f - 90f);
             float inner = minimum * 0.10f;
@@ -725,7 +740,7 @@ public final class CardTileView extends View {
             );
         }
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(style.getAccentColor());
+        paint.setColor(cardBackAccentColor(style));
         canvas.drawCircle(centerX, centerY, Math.max(dp(2f), minimum * 0.09f), paint);
     }
 
@@ -741,8 +756,8 @@ public final class CardTileView extends View {
         for (int wave = -1; wave <= 1; wave++) {
             paint.setColor(
                 wave + 1 == cardBackGeometry.waveAccentBand
-                    ? style.getAccentColor()
-                    : style.getPatternColor()
+                    ? cardBackAccentColor(style)
+                    : cardBackPatternColor(style)
             );
             float y = centerY + minimum * wave * cardBackGeometry.waveSpacing;
             float amplitude = minimum
@@ -794,8 +809,8 @@ public final class CardTileView extends View {
                 shapePath.close();
                 paint.setColor(
                     (row + column) % 2 == 0
-                        ? style.getPatternColor()
-                        : style.getAccentColor()
+                        ? cardBackPatternColor(style)
+                        : cardBackAccentColor(style)
                 );
                 canvas.drawPath(shapePath, paint);
             }
@@ -816,7 +831,7 @@ public final class CardTileView extends View {
             minimum * orbitPattern.firstRadiusX,
             minimum * orbitPattern.firstRadiusY,
             orbitPattern.firstTiltDegrees,
-            style.getPatternColor()
+            cardBackPatternColor(style)
         );
         drawOrbit(
             canvas,
@@ -825,7 +840,7 @@ public final class CardTileView extends View {
             minimum * orbitPattern.secondRadiusX,
             minimum * orbitPattern.secondRadiusY,
             orbitPattern.secondTiltDegrees,
-            style.getPatternColor()
+            cardBackPatternColor(style)
         );
 
         long uptimeMillis = backAnimationTimeMillis();
@@ -835,7 +850,7 @@ public final class CardTileView extends View {
                 * orbitPattern.direction) % 360d
         );
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(style.getPatternColor());
+        paint.setColor(cardBackPatternColor(style));
         drawOrbitPlanet(
             canvas,
             centerX,
@@ -857,7 +872,7 @@ public final class CardTileView extends View {
             Math.max(dp(1f), minimum * 0.028f)
         );
 
-        paint.setColor(style.getAccentColor());
+        paint.setColor(cardBackAccentColor(style));
         canvas.drawCircle(centerX, centerY, Math.max(dp(2f), minimum * 0.075f), paint);
     }
 
@@ -930,11 +945,11 @@ public final class CardTileView extends View {
         float leftKneeY = centerY + minimum * cardBackGeometry.prismLeftKneeY;
         float rightKneeY = centerY + minimum * cardBackGeometry.prismRightKneeY;
         int firstColor = cardBackGeometry.prismPaletteFlipped
-            ? style.getAccentColor()
-            : style.getPatternColor();
+            ? cardBackAccentColor(style)
+            : cardBackPatternColor(style);
         int secondColor = cardBackGeometry.prismPaletteFlipped
-            ? style.getPatternColor()
-            : style.getAccentColor();
+            ? cardBackPatternColor(style)
+            : cardBackAccentColor(style);
         drawFacet(canvas, firstColor, left, top, apexX, apexY, left, leftKneeY);
         drawFacet(canvas, secondColor, left, top, right, top, apexX, apexY);
         drawFacet(canvas, firstColor, right, top, right, rightKneeY, apexX, apexY);
@@ -976,7 +991,7 @@ public final class CardTileView extends View {
             * cardBackGeometry.botanicalStemDirection;
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(Math.max(dp(1f), minimum * 0.025f));
-        paint.setColor(style.getPatternColor());
+        paint.setColor(cardBackPatternColor(style));
         shapePath.reset();
         shapePath.moveTo(centerX - curve, centerY + minimum * 0.34f);
         shapePath.cubicTo(
@@ -1013,8 +1028,8 @@ public final class CardTileView extends View {
                 baseY + minimum * CardBackGeometry.BOTANICAL_LEAF_LENGTH_Y,
                 minimum * CardBackGeometry.BOTANICAL_LEAF_HALF_WIDTH,
                 leaf == cardBackGeometry.botanicalAccentLeaf
-                    ? style.getAccentColor()
-                    : style.getPatternColor()
+                    ? cardBackAccentColor(style)
+                    : cardBackPatternColor(style)
             );
         }
 
@@ -1031,7 +1046,7 @@ public final class CardTileView extends View {
             terminalBaseY
                 + minimum * CardBackGeometry.BOTANICAL_TERMINAL_LENGTH_Y,
             minimum * CardBackGeometry.BOTANICAL_LEAF_HALF_WIDTH,
-            style.getPatternColor()
+            cardBackPatternColor(style)
         );
     }
 
@@ -1088,7 +1103,7 @@ public final class CardTileView extends View {
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeCap(Paint.Cap.ROUND);
         paint.setStrokeWidth(Math.max(dp(3f), minimum * 0.12f));
-        paint.setColor(style.getPatternColor());
+        paint.setColor(cardBackPatternColor(style));
         shapePath.reset();
         shapePath.moveTo(centerX - minimum * 0.31f, centerY - minimum * 0.29f);
         shapePath.cubicTo(
@@ -1115,7 +1130,7 @@ public final class CardTileView extends View {
         paint.setColor(style.getFillColor());
         canvas.drawPath(shapePath, paint);
         paint.setStrokeWidth(Math.max(dp(3f), minimum * 0.10f));
-        paint.setColor(style.getAccentColor());
+        paint.setColor(cardBackAccentColor(style));
         canvas.drawPath(shapePath, paint);
     }
 
@@ -1149,7 +1164,7 @@ public final class CardTileView extends View {
             );
             paint.setStrokeWidth(Math.max(dp(2f), minimum * (ribbon == 0 ? 0.085f : 0.065f)));
             paint.setColor(colorWithAlpha(
-                ribbon == 0 ? style.getAccentColor() : style.getPatternColor(),
+                ribbon == 0 ? cardBackAccentColor(style) : cardBackPatternColor(style),
                 ribbon == 0 ? 225 : 190
             ));
             canvas.drawPath(shapePath, paint);
@@ -1169,7 +1184,7 @@ public final class CardTileView extends View {
             float localPhase = phase + (float) index / FIREFLY_X.length;
             float glow = CardBackMotion.pulse(localPhase);
             paint.setColor(colorWithAlpha(
-                index % 3 == 0 ? style.getAccentColor() : style.getPatternColor(),
+                index % 3 == 0 ? cardBackAccentColor(style) : cardBackPatternColor(style),
                 Math.round(80f + glow * 175f)
             ));
             canvas.drawCircle(
@@ -1200,14 +1215,14 @@ public final class CardTileView extends View {
                 centerY - minimum * 0.075f
             );
             paint.setColor(
-                petal % 2 == 0 ? style.getPatternColor() : style.getAccentColor()
+                petal % 2 == 0 ? cardBackPatternColor(style) : cardBackAccentColor(style)
             );
             int saveCount = canvas.save();
             canvas.rotate(rocking + petal * 60f, centerX, centerY);
             canvas.drawOval(patternBounds, paint);
             canvas.restoreToCount(saveCount);
         }
-        paint.setColor(style.getAccentColor());
+        paint.setColor(cardBackAccentColor(style));
         canvas.drawCircle(
             centerX,
             centerY,
@@ -1242,8 +1257,8 @@ public final class CardTileView extends View {
                 0.10f + CardBackMotion.stableUnit(cardNumber, comet, 104) * 0.07f
             );
             int color = comet % 3 == 0
-                ? style.getAccentColor()
-                : style.getPatternColor();
+                ? cardBackAccentColor(style)
+                : cardBackPatternColor(style);
             paint.setColor(colorWithAlpha(color, comet % 2 == 0 ? 205 : 160));
             paint.setStrokeWidth(Math.max(dp(1f), minimum * 0.022f));
             canvas.drawLine(
@@ -1289,7 +1304,7 @@ public final class CardTileView extends View {
             float radius = minimum * (0.045f + progress * 0.40f);
             paint.setStrokeWidth(Math.max(dp(0.8f), minimum * (0.012f + remaining * 0.018f)));
             paint.setColor(colorWithAlpha(
-                ripple % 3 == 0 ? style.getAccentColor() : style.getPatternColor(),
+                ripple % 3 == 0 ? cardBackAccentColor(style) : cardBackPatternColor(style),
                 Math.round(32f + remaining * remaining * 190f)
             ));
             canvas.drawCircle(sourceX, sourceY, radius, paint);
@@ -1297,7 +1312,7 @@ public final class CardTileView extends View {
 
         float glow = CardBackMotion.pulse(basePhase);
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(style.getAccentColor());
+        paint.setColor(cardBackAccentColor(style));
         canvas.drawCircle(
             sourceX,
             sourceY,
@@ -1329,8 +1344,8 @@ public final class CardTileView extends View {
                 float progress = CardBackMotion.wrap(headProgress - trail * 0.075f);
                 float y = centerY + minimum * (-0.48f + progress * 0.96f);
                 int color = trail == 0 && column % 2 == 0
-                    ? style.getAccentColor()
-                    : style.getPatternColor();
+                    ? cardBackAccentColor(style)
+                    : cardBackPatternColor(style);
                 paint.setStyle(Paint.Style.FILL);
                 paint.setColor(colorWithAlpha(color, 235 - trail * 48));
                 patternBounds.set(
@@ -1701,6 +1716,43 @@ public final class CardTileView extends View {
         return RUBICS_STICKER_COLORS[colorId];
     }
 
+    private int cardBackPatternColor(CardBackStyle style) {
+        if (!highContrast) {
+            return style.getPatternColor();
+        }
+        ensureHighContrastBackColors(style);
+        return cachedHighContrastBackPattern;
+    }
+
+    private int cardBackAccentColor(CardBackStyle style) {
+        if (!highContrast) {
+            return style.getAccentColor();
+        }
+        ensureHighContrastBackColors(style);
+        return cachedHighContrastBackAccent;
+    }
+
+    private void ensureHighContrastBackColors(CardBackStyle style) {
+        if (cachedHighContrastBackStyle == style) {
+            return;
+        }
+        int fillColor = style.getFillColor();
+        int contrastTarget = contrastTextColor(fillColor);
+        cachedHighContrastBackPattern = ContrastColors.ensureMinimumContrast(
+            style.getPatternColor(),
+            contrastTarget,
+            3.0,
+            fillColor
+        );
+        cachedHighContrastBackAccent = ContrastColors.ensureMinimumContrast(
+            style.getAccentColor(),
+            contrastTarget,
+            3.0,
+            fillColor
+        );
+        cachedHighContrastBackStyle = style;
+    }
+
     private void drawEmoji(Canvas canvas) {
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(Color.rgb(36, 39, 55));
@@ -1959,9 +2011,9 @@ public final class CardTileView extends View {
         );
     }
 
-    private static int colorWithAlpha(int color, int alpha) {
+    private int colorWithAlpha(int color, int alpha) {
         return Color.argb(
-            Math.max(0, Math.min(255, alpha)),
+            Math.max(0, Math.min(255, highContrast ? Math.max(alpha, 205) : alpha)),
             Color.red(color),
             Color.green(color),
             Color.blue(color)

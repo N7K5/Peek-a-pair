@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.flipandfind"
         minSdk = 23
         targetSdk = 35
-        versionCode = 25
-        versionName = "3.4.0"
+        versionCode = 31
+        versionName = "3.10.0"
     }
 
     buildTypes {

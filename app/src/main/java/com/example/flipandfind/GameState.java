@@ -92,14 +92,27 @@ public final class GameState {
     }
 
     GameState(int humanPlayerCount, int pairCount, Random random) {
+        this(humanPlayerCount, pairCount, 0, random);
+    }
+
+    /** Creates a new shuffled game whose first turn belongs to {@code startingPlayer}. */
+    public GameState(int humanPlayerCount, int pairCount, int startingPlayer) {
+        this(humanPlayerCount, pairCount, startingPlayer, new Random());
+    }
+
+    GameState(int humanPlayerCount, int pairCount, int startingPlayer, Random random) {
         validateConfiguration(humanPlayerCount, pairCount);
         this.humanPlayerCount = humanPlayerCount;
         this.totalPlayerCount = humanPlayerCount == 1 ? 2 : humanPlayerCount;
+        if (startingPlayer < 0 || startingPlayer >= totalPlayerCount) {
+            throw new IllegalArgumentException("Starting player is invalid");
+        }
         this.pairCount = pairCount;
         this.remainingPairs = pairCount;
         this.pairIds = shuffledDeck(pairCount, random);
         this.cardStates = new CardState[pairCount * 2];
         this.scores = new int[totalPlayerCount];
+        this.currentPlayer = startingPlayer;
         for (int index = 0; index < cardStates.length; index++) {
             cardStates[index] = CardState.HIDDEN;
         }

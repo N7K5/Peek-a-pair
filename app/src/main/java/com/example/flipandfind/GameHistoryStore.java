@@ -57,6 +57,16 @@ public final class GameHistoryStore {
         persist();
     }
 
+    /** Deletes exactly one retained row, including its contribution to lifetime totals. */
+    public synchronized boolean deleteRetainedGame(int newestFirstIndex) {
+        if (newestFirstIndex < 0 || newestFirstIndex >= history.getRetainedGameCount()) {
+            return false;
+        }
+        history.removeRetainedGame(newestFirstIndex);
+        persist();
+        return true;
+    }
+
     /** Clears retained games and every lifetime history total. */
     public synchronized void reset() {
         history = GameHistory.empty(maxEntries);
